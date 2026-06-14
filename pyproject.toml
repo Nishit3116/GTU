@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gtu-pyq-downloader"
+version = "1.0.0"
+description = "Production-ready GTU PYQ downloader and PDF merger"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "pypdf>=5.0.0",
+]
+
+[project.scripts]
+gtu-pyq = "gtu_pyq_downloader.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["gtu_pyq_downloader*"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
