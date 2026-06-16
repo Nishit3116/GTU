@@ -4,6 +4,7 @@ Serves the frontend static files and exposes JSON APIs for cascading dropdowns,
 live dynamic subject scraping, and downloading PYQs and syllabi on-demand.
 """
 
+import mimetypes
 import os
 import json
 import logging
@@ -19,8 +20,17 @@ from .config import config
 
 logger = logging.getLogger(__name__)
 
-# Web static files directory
+# Web static files directory — all frontend assets live here
 WEB_DIR = Path(__file__).parent / "web"
+
+# Canonical aliases: URL path  ->  filename inside WEB_DIR
+_STATIC_ALIASES: Dict[str, str] = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/index.css": "index.css",
+    "/index.js": "index.js",
+    "/favicon.ico": "favicon.ico",
+}
 
 
 _SHARED_PROVIDER = None
@@ -64,18 +74,31 @@ class GTUWebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
-    def _send_static(self, file_path: Path, content_type: str, download_name: str = "") -> None:
-        if not file_path.exists():
+    def _send_static(self, file_path: Path, content_type: str = "", download_name: str = "") -> None:
+        """Stream *file_path* to the client with the correct Content-Type.
+
+        If *content_type* is omitted, it is inferred from the file extension
+        using mimetypes.guess_type so every asset type is served correctly.
+        """
+        if not file_path.exists() or not file_path.is_file():
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"File not found")
             return
+
+        # Resolve content-type
+        if not content_type:
+            guessed, _ = mimetypes.guess_type(str(file_path))
+            content_type = guessed or "application/octet-stream"
+
+        data = file_path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
         if download_name:
             self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
         self.end_headers()
-        self.wfile.write(file_path.read_bytes())
+        self.wfile.write(data)
 
     def do_OPTIONS(self) -> None:
         # CORS preflight
@@ -101,21 +124,31 @@ class GTUWebHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # ── Static routes ─────────────────────────────────────────────────────
-        if path == "/" or path == "/index.html":
-            self._send_static(WEB_DIR / "index.html", "text/html; charset=utf-8")
+        # ── Generic static file server ─────────────────────────────────────────
+        # 1. Check canonical aliases (/, /index.html, /index.css, ...)
+        if path in _STATIC_ALIASES:
+            self._send_static(WEB_DIR / _STATIC_ALIASES[path])
             return
-        elif path == "/index.css":
-            self._send_static(WEB_DIR / "index.css", "text/css; charset=utf-8")
-            return
-        elif path == "/index.js":
-            self._send_static(WEB_DIR / "index.js", "application/javascript; charset=utf-8")
-            return
-        elif path.startswith("/downloads/"):
+
+        # 2. Check for any file that physically exists inside WEB_DIR.
+        #    Strip the leading '/' and resolve against WEB_DIR.
+        #    Security: ensure the resolved path is still inside WEB_DIR.
+        rel = urllib.parse.unquote(path.lstrip("/"))
+        candidate = (WEB_DIR / rel).resolve()
+        try:
+            candidate.relative_to(WEB_DIR.resolve())   # raises ValueError if outside
+        except ValueError:
+            pass  # path traversal attempt — fall through to API router
+        else:
+            if candidate.is_file():
+                self._send_static(candidate)
+                return
+
+        # 3. Downloads (PDFs served from the project downloads dir)
+        if path.startswith("/downloads/"):
             rel_path = urllib.parse.unquote(path[1:])
             file_path = config.project_root / rel_path
-            filename = file_path.name
-            self._send_static(file_path, "application/pdf", download_name=filename)
+            self._send_static(file_path, download_name=file_path.name)
             return
 
         # ── API routes ────────────────────────────────────────────────────────
