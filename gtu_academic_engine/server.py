@@ -8,6 +8,7 @@ import mimetypes
 import os
 import json
 import logging
+import traceback
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -75,14 +76,29 @@ class GTUWebHandler(BaseHTTPRequestHandler):
         logger.debug(format % args)
 
     def _send_json(self, status: int, data: Any) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        """Send a JSON response.  Always sets Content-Type: application/json.
+
+        Silently swallows BrokenPipeError / ConnectionAbortedError so that a
+        client that disconnects early does not cause an unhandled exception
+        that would trigger Python's built-in HTML error page.
+        """
+        try:
+            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        except Exception as exc:
+            body = json.dumps({"success": False, "error": f"JSON serialisation failed: {exc}"}).encode("utf-8")
+            status = 500
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass   # client disconnected — nothing we can do
 
     def _send_static(self, file_path: Path, content_type: str = "", download_name: str = "") -> None:
         """Stream *file_path* to the client with the correct Content-Type.
@@ -173,21 +189,32 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == "/api/branches":
-                course_id = params.get("course")
-                if not course_id:
-                    self._send_json(400, {"error": "Missing course parameter"})
-                    return
-                # Check cache first
-                branches = self._get_cached_branches(course_id)
-                if branches:
-                    self._send_json(200, branches)
-                    return
-                # On-demand live scrape
-                logger.info("Scraping branches for course: %s", course_id)
-                scraped = self._pw_call("fetch_branches", course_id)
-                if scraped:
-                    self._save_scraped_branches(course_id, scraped)
-                self._send_json(200, scraped)
+                logger.info("[API] Entering /api/branches | params=%s", params)
+                try:
+                    course_id = params.get("course")
+                    if not course_id:
+                        self._send_json(400, {"success": False, "error": "Missing 'course' query parameter"})
+                        return
+                    # 1. Check cache first
+                    logger.info("[API] /api/branches | Checking cache for course=%s", course_id)
+                    branches = self._get_cached_branches(course_id)
+                    if branches:
+                        logger.info("[API] /api/branches | Cache hit: %d branches", len(branches))
+                        self._send_json(200, branches)
+                        return
+                    # 2. Live scrape via subprocess
+                    logger.info("[API] /api/branches | Cache miss. Calling subprocess fetch_branches(%s)", course_id)
+                    scraped = self._pw_call("fetch_branches", course_id)
+                    logger.info("[API] /api/branches | Subprocess returned %d branches", len(scraped) if scraped else 0)
+                    # Verify JSON-serialisable
+                    json.dumps(scraped)   # raises TypeError if not serialisable
+                    if scraped:
+                        self._save_scraped_branches(course_id, scraped)
+                    self._send_json(200, scraped or [])
+                except Exception as _br_exc:
+                    _tb_str = traceback.format_exc()
+                    logger.error("[API] /api/branches FAILED:\n%s", _tb_str)
+                    self._send_json(500, {"success": False, "error": str(_br_exc), "traceback": _tb_str})
                 return
 
             elif path == "/api/semesters":
@@ -420,13 +447,18 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 return
 
             else:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"API Route not found")
+                logger.warning("[API] Unknown route: %s", path)
+                self._send_json(404, {"success": False, "error": f"API route not found: {path}"})
 
-        except Exception as e:
-            logger.exception("Web server error on API route %s", path)
-            self._send_json(500, {"error": str(e)})
+        except Exception as _api_exc:
+            _tb_str = traceback.format_exc()
+            logger.error("[API] Unhandled error on %s:\n%s", path, _tb_str)
+            self._send_json(500, {
+                "success": False,
+                "error": str(_api_exc),
+                "traceback": _tb_str,
+                "path": path,
+            })
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
