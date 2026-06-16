@@ -4,18 +4,26 @@ from pathlib import Path
 from ..config import config
 
 
-def setup_logging(level: str = "INFO"):
+def setup_logging(level: str = None):
+    """Configure root logger with console + rotating file handlers.
+
+    Args:
+        level: Override log level string (DEBUG/INFO/WARNING/ERROR).
+               Falls back to config.log_level (which reads GTU_LOG_LEVEL env var).
+    """
+    effective_level = (level or config.log_level or "INFO").upper()
+
     log_dir = config.logs_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     formatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s")
 
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(effective_level)
 
     # Console handler
     ch = logging.StreamHandler()
     ch.setFormatter(formatter)
-    ch.setLevel(level)
+    ch.setLevel(effective_level)
     root.addHandler(ch)
 
     # System log (all messages)
@@ -57,3 +65,4 @@ def setup_logging(level: str = "INFO"):
     error_fh.setFormatter(formatter)
     error_fh.setLevel(logging.WARNING)
     root.addHandler(error_fh)
+

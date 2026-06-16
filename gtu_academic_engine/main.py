@@ -703,35 +703,50 @@ def run() -> None:
         run_cli(cache, settings, internet_ok)
         return
 
-    # Default: Run the local Web Application UI
-    _header("GTU Academic Engine V2")
-    print("  Starting Web Application Server...")
-    print("  To run in CLI mode instead, execute: python -m gtu_academic_engine --cli\n")
-
+    # Default: Run the Web Application UI (local or Render)
+    import os
     import threading
     import webbrowser
     from .server import run_web_server
 
-    port = 5000
+    # Render (and other PaaS) injects PORT as an environment variable.
+    # When PORT is set we run in foreground mode (server blocks the main thread)
+    # so the process stays alive. Locally, we keep the existing behaviour:
+    # run the server in a background daemon thread and auto-open the browser.
+    render_mode = "PORT" in os.environ
+    port = int(os.environ.get("PORT", 5000))
 
-    # Start built-in server in background thread
-    server_thread = threading.Thread(target=run_web_server, args=(port,), daemon=True)
-    server_thread.start()
+    _header("GTU Academic Engine V2")
 
-    # Wait briefly for server to boot, then launch browser
-    time.sleep(1.2)
-    web_url = f"http://localhost:{port}"
-    print(f"  Opening web interface at: {web_url}")
-    print("  Press Ctrl+C in this terminal to terminate the server.")
-    webbrowser.open(web_url)
+    if render_mode:
+        # ── Render / production mode ─────────────────────────────────────────
+        # Run the server in the foreground on 0.0.0.0 so Render's health-check
+        # can reach it. No browser launch.
+        print(f"  [Render] Starting web server on port {port} (foreground)...")
+        logger.info("Starting in Render/production mode on port %d", port)
+        run_web_server(port=port)   # blocks until process is killed
+    else:
+        # ── Local development mode ───────────────────────────────────────────
+        print("  Starting Web Application Server...")
+        print("  To run in CLI mode instead, execute: python -m gtu_academic_engine --cli\n")
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n  Server stopped by user. Goodbye!\n")
-        logger.info("Web server stopped by user")
-        sys.exit(0)
+        server_thread = threading.Thread(target=run_web_server, args=(port,), daemon=True)
+        server_thread.start()
+
+        # Wait briefly for server to boot, then open browser
+        time.sleep(1.2)
+        web_url = f"http://localhost:{port}"
+        print(f"  Opening web interface at: {web_url}")
+        print("  Press Ctrl+C in this terminal to terminate the server.")
+        webbrowser.open(web_url)
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n  Server stopped by user. Goodbye!\n")
+            logger.info("Web server stopped by user")
+            sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -32,11 +32,22 @@ class GTUWebHandler(BaseHTTPRequestHandler):
     cache_manager = CacheManager()
 
     def _get_provider(self) -> ASPXProvider:
+        """Return (or lazily initialise) the shared Playwright browser provider.
+
+        Any initialisation error is logged and re-raised so callers can return a
+        graceful 503 instead of crashing the whole server process.
+        """
         global _SHARED_PROVIDER
         if _SHARED_PROVIDER is None:
-            logger.info("Initializing shared browser provider...")
-            _SHARED_PROVIDER = ASPXProvider(headless=True)
-            _SHARED_PROVIDER._start()
+            logger.info("Initializing shared Playwright browser provider...")
+            try:
+                _SHARED_PROVIDER = ASPXProvider(headless=True)
+                _SHARED_PROVIDER._start()
+                logger.info("Playwright browser provider ready.")
+            except Exception as exc:
+                logger.error("Playwright initialization failed: %s", exc)
+                _SHARED_PROVIDER = None  # keep None so next request retries
+                raise
         return _SHARED_PROVIDER
 
     def log_message(self, format, *args):
@@ -77,6 +88,18 @@ class GTUWebHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+
+        # ── Health-check endpoint (Render / uptime monitors) ──────────────────
+        if path == "/health":
+            info = self.cache_manager.get_academic_data_info()
+            self._send_json(200, {
+                "status": "OK",
+                "service": "GTU Academic Engine V2",
+                "version": "2.0",
+                "cache_loaded": info.get("exists", False),
+                "subjects_cached": info.get("total_subjects", 0),
+            })
+            return
 
         # ── Static routes ─────────────────────────────────────────────────────
         if path == "/" or path == "/index.html":
@@ -624,21 +647,82 @@ class GTUWebHandler(BaseHTTPRequestHandler):
 
 
 def run_web_server(port: int = 5000) -> None:
+    """Start the HTTP server and block until a KeyboardInterrupt or SIGTERM.
+
+    Binds to 0.0.0.0 (empty string) so it is reachable on all network
+    interfaces — required for cloud platforms such as Render.
+    """
+    # ── Startup banner ────────────────────────────────────────────────────────
+    banner_lines = [
+        "================================================",
+        "  GTU Academic Engine V2.0",
+        "  Initializing...",
+    ]
+
+    # Report cache status
+    try:
+        _cm = CacheManager()
+        info = _cm.get_academic_data_info()
+        if info.get("exists"):
+            banner_lines.append(
+                f"  Loading Cache...  ({info['total_subjects']} subjects cached)"
+            )
+        else:
+            banner_lines.append("  Loading Cache...  (empty — will scrape live)")
+    except Exception as exc:
+        banner_lines.append(f"  Loading Cache...  WARNING: {exc}")
+        logger.warning("Cache check failed at startup: %s", exc)
+
+    # Report Playwright availability
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: F401
+        banner_lines.append("  Initializing Playwright... OK")
+    except ImportError:
+        banner_lines.append(
+            "  Initializing Playwright... NOT INSTALLED "
+            "(run: playwright install chromium)"
+        )
+        logger.warning("Playwright is not installed — live scraping will be unavailable.")
+    except Exception as exc:
+        banner_lines.append(f"  Initializing Playwright... WARNING: {exc}")
+        logger.warning("Playwright check failed: %s", exc)
+
+    banner_lines += [
+        "  Server Ready",
+        f"  Listening on PORT: {port}",
+        "================================================",
+    ]
+
+    banner = "\n".join(banner_lines)
+    print(f"\n{banner}\n")
+    for line in banner_lines:
+        logger.info(line.strip())
+
+    # ── Bind and serve ────────────────────────────────────────────────────────
+    # Empty string → 0.0.0.0 (all interfaces). Do NOT use "localhost" or
+    # "127.0.0.1" — that would make the service unreachable on Render.
     server_address = ("", port)
     httpd = HTTPServer(server_address, GTUWebHandler)
-    logger.info("Web application server running on http://localhost:%d", port)
-    print(f"\n  Web application server running on http://localhost:{port}")
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        logger.info("Stopping web application server...")
-        httpd.server_close()
+        print("\n  Shutting down server...")
+        logger.info("KeyboardInterrupt received — stopping web server.")
     finally:
+        # ── Graceful shutdown ─────────────────────────────────────────────────
+        httpd.server_close()
+        logger.info("HTTP server closed.")
+
         global _SHARED_PROVIDER
         if _SHARED_PROVIDER is not None:
-            logger.info("Closing shared browser provider...")
+            logger.info("Closing shared Playwright browser provider...")
             try:
                 _SHARED_PROVIDER.close()
-            except Exception:
-                pass
-            _SHARED_PROVIDER = None
+                logger.info("Playwright browser closed successfully.")
+            except Exception as exc:
+                logger.warning("Error closing Playwright provider: %s", exc)
+            finally:
+                _SHARED_PROVIDER = None
+
+        logger.info("GTU Academic Engine V2 shut down cleanly.")

@@ -390,6 +390,60 @@ isort .
 
 ---
 
+## 🌐 Cloud Deployment
+
+### Deploy on Render
+
+The project includes a `render.yaml` file — connect your GitHub repository on [render.com](https://render.com) and click **Deploy**. No additional configuration required.
+
+#### Build Command
+```bash
+pip install -e .
+playwright install --with-deps chromium
+```
+
+#### Start Command
+```bash
+python -m gtu_academic_engine
+```
+
+#### How it works on Render
+
+| What | Detail |
+|---|---|
+| **PORT** | Auto-injected by Render; the app reads `os.environ["PORT"]` |
+| **Bind address** | `0.0.0.0` (all interfaces) — required for Render's proxy |
+| **Playwright** | Chromium installed during build step; binary cached between deploys |
+| **Health check** | `GET /health` returns `{"status":"OK","version":"2.0"}` |
+| **Cache** | Stored on the ephemeral disk; refreshed via the web dashboard |
+
+#### Supported Environment Variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `5000` | HTTP server port (auto-set by Render) |
+| `GTU_CACHE_PATH` | `<pkg>/cache` | Override cache directory |
+| `GTU_DOWNLOAD_PATH` | `<pkg>/downloads` | Override downloads directory |
+| `GTU_LOG_LEVEL` | `INFO` | Logging level: DEBUG / INFO / WARNING / ERROR |
+| `GTU_METADATA_PATH` | `<pkg>/metadata` | Override metadata directory |
+
+#### Startup Log (visible in Render dashboard)
+
+```
+================================================
+  GTU Academic Engine V2.0
+  Initializing...
+  Loading Cache...  (empty — will scrape live)
+  Initializing Playwright... OK
+  Server Ready
+  Listening on PORT: 10000
+================================================
+```
+
+> **Note:** Free Render instances spin down after 15 minutes of inactivity. The first request after a cold start will take ~30 seconds (Playwright browser launch + GTU portal load). Subsequent requests are fast.
+
+---
+
 ## ❓ FAQ
 
 **Q: Does this store or upload my data anywhere?**
@@ -408,6 +462,7 @@ A: Yes — the engine supports all GTU courses and branches. The cascading dropd
 A: Check the terminal output for the `gtu_academic_engine` process. Common causes: the GTU portal is down for maintenance, Playwright's Chromium binary was not installed correctly, or a network timeout occurred.
 
 ---
+
 
 ## 📜 License & Credits
 
