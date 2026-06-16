@@ -9,7 +9,6 @@ import os
 import json
 import logging
 import threading
-import concurrent.futures
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -35,42 +34,103 @@ _STATIC_ALIASES: Dict[str, str] = {
 }
 
 
-# ── Playwright worker thread ──────────────────────────────────────────────────
+# ── Dedicated Playwright worker thread ─────────────────────────────────────────────
 #
-# The Playwright sync API raises:
-#   "You are using Playwright Sync API inside the asyncio loop."
-# when called from a thread that already has an active asyncio event loop
-# (Python 3.10+ on Linux always has one).  The fix is to run ALL Playwright
-# operations in a dedicated daemon thread that never touches asyncio.
+# ThreadPoolExecutor workers share Python's concurrent.futures infrastructure
+# which may interact with asyncio on Linux / Python 3.12+.
 #
-# A ThreadPoolExecutor(max_workers=1) guarantees:
-#   - One persistent worker thread with no event loop.
-#   - All tasks are serialised (safe for single shared browser page).
-#   - The thread is reused across requests (no per-request startup cost).
+# A plain threading.Thread is guaranteed to have zero asyncio contamination:
+#   - Never touched by asyncio machinery.
+#   - Owns the browser for its entire lifetime.
+#   - All calls are serialised via queue.Queue (safe for single browser page).
+#   - No per-request startup cost (browser is reused across requests).
 # ---------------------------------------------------------------------------
-_PW_EXECUTOR: concurrent.futures.ThreadPoolExecutor = (
-    concurrent.futures.ThreadPoolExecutor(
-        max_workers=1,
-        thread_name_prefix="playwright-worker",
-    )
-)
+import queue as _queue
+
+
+class _PlaywrightWorkerThread(threading.Thread):
+    """Dedicated background thread that owns the Playwright browser lifecycle.
+
+    All Playwright operations MUST go through ``call(fn)`` which submits the
+    callable to this thread's queue and blocks until the result is ready.
+    """
+
+    _STOP = object()  # sentinel
+
+    def __init__(self) -> None:
+        super().__init__(name="playwright-worker", daemon=True)
+        self._task_queue: _queue.Queue = _queue.Queue()
+        self.start()
+
+    def run(self) -> None:
+        """Worker loop — runs forever on the dedicated thread."""
+        import asyncio as _aio
+        _tname = threading.current_thread().name
+        try:
+            _rl = _aio.get_running_loop()
+            logger.warning(
+                "[PW-THREAD] Worker started | THREAD=%s | RUNNING_LOOP=%s  <-- BAD",
+                _tname, _rl,
+            )
+        except RuntimeError:
+            logger.info(
+                "[PW-THREAD] Worker started | THREAD=%s | NO_RUNNING_LOOP (safe)",
+                _tname,
+            )
+        while True:
+            item = self._task_queue.get()
+            if item is self._STOP:
+                logger.info("[PW-THREAD] Worker stopping.")
+                break
+            fn, result_queue = item
+            try:
+                result_queue.put((fn(), None))
+            except Exception as exc:
+                result_queue.put((None, exc))
+
+    def call(self, fn, timeout: float = 120.0):
+        """Submit *fn* to the worker thread and return its result.
+
+        Blocks the calling thread until *fn* finishes (up to *timeout* seconds).
+        Re-raises any exception that occurred inside *fn*.
+        """
+        result_queue: _queue.Queue = _queue.Queue()
+        self._task_queue.put((fn, result_queue))
+        result, exc = result_queue.get(timeout=timeout)
+        if exc is not None:
+            raise exc
+        return result
+
+    def stop(self) -> None:
+        """Signal the worker loop to exit cleanly."""
+        self._task_queue.put(self._STOP)
+
+
+# Singleton worker — created once at module import time.
+_PW_THREAD = _PlaywrightWorkerThread()
 
 _SHARED_PROVIDER = None
-_PROVIDER_LOCK = threading.Lock()
 
 
 def _ensure_provider() -> "ASPXProvider":
-    """Initialise the shared ASPXProvider inside the Playwright worker thread.
+    """Initialise the shared ASPXProvider.  Must only be called from *_PW_THREAD*."""
+    import asyncio as _aio
+    _tname = threading.current_thread().name
+    try:
+        _loop = _aio.get_running_loop()
+        _loop_info = f"RUNNING LOOP DETECTED: {_loop}"
+    except RuntimeError:
+        _loop_info = "NO_RUNNING_LOOP (safe for sync_playwright)"
 
-    Must only ever be called from within *_PW_EXECUTOR*.
-    """
+    logger.info("[PW-WORKER] _ensure_provider | THREAD=%s | %s", _tname, _loop_info)
+
     global _SHARED_PROVIDER
     if _SHARED_PROVIDER is None:
-        logger.info("Playwright worker: initialising browser provider...")
+        logger.info("[PW-WORKER] Initialising ASPXProvider on thread: %s", _tname)
         provider = ASPXProvider(headless=True)
         provider._start()
         _SHARED_PROVIDER = provider
-        logger.info("Playwright worker: browser provider ready.")
+        logger.info("[PW-WORKER] Browser provider ready on thread: %s", _tname)
     return _SHARED_PROVIDER
 
 
@@ -90,23 +150,26 @@ class GTUWebHandler(BaseHTTPRequestHandler):
         blocks until the result is available.  All Playwright sync API calls
         therefore run in a thread that has no asyncio event loop, which avoids
         the 'Sync API inside the asyncio loop' error on Render / Linux.
-
-        Args:
-            method: Name of the ASPXProvider method to call.
-            *args, **kwargs: Forwarded to the provider method.
-
-        Returns:
-            Whatever the provider method returns.
-
-        Raises:
-            Re-raises any exception from the worker thread.
         """
+        import threading as _th
+        import asyncio as _aio
+
+        caller_thread = _th.current_thread().name
+        try:
+            caller_loop = str(_aio.get_running_loop())
+        except RuntimeError:
+            caller_loop = "NO_RUNNING_LOOP"
+
+        logger.info(
+            "[PW-DISPATCH] _pw_call(%s) | caller_thread=%s | caller_loop=%s",
+            method, caller_thread, caller_loop,
+        )
+
         def _task():
             prov = _ensure_provider()
             return getattr(prov, method)(*args, **kwargs)
 
-        future = _PW_EXECUTOR.submit(_task)
-        return future.result(timeout=120)  # 2-min max per live scrape
+        return _PW_THREAD.call(_task, timeout=120)  # 2-min max per live scrape
 
     def log_message(self, format, *args):
         # Override to suppress default HTTP logging to stdout to keep terminal clean
@@ -568,18 +631,38 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 # ── Download Syllabus ─────────────────────────────────────────
                 if dl_type in ("syllabus", "both"):
                     try:
-                        dl = SyllabusDownloader(base_dir=config.downloads_dir)
-                        saved_path = dl.download(subject)
-                        if saved_path:
-                            results["syllabus_success"] = True
-                            results["syllabus_path"] = str(saved_path)
+                        # Route syllabus download through the Playwright executor so
+                        # download_syllabus() runs on the dedicated worker thread.
+                        subject_code = subject["subject_code"]
 
-                            # Get relative path for browser download
-                            try:
-                                rel_syllabus = Path(saved_path).relative_to(config.project_root)
-                                results["syllabus_url"] = "/" + rel_syllabus.as_posix()
-                            except ValueError:
-                                results["syllabus_url"] = None
+                        def _syllabus_task():
+                            prov = _ensure_provider()
+                            return prov.download_syllabus(subject_code)
+
+                        pdf_bytes = _PW_THREAD.call(_syllabus_task, timeout=60)
+
+                        if pdf_bytes:
+                            # SyllabusDownloader handles path construction + saving
+                            dl = SyllabusDownloader(base_dir=config.downloads_dir)
+                            # Write bytes directly — no need to re-open ASPXProvider
+                            from .downloader.syllabus_downloader import _structured_output_dir, _validate_pdf_bytes
+                            if _validate_pdf_bytes(pdf_bytes):
+                                out_path = _structured_output_dir(subject, config.downloads_dir) / "syllabus.pdf"
+                                out_path.parent.mkdir(parents=True, exist_ok=True)
+                                out_path.write_bytes(pdf_bytes)
+                                results["syllabus_success"] = True
+                                results["syllabus_path"] = str(out_path)
+                                try:
+                                    rel_syllabus = out_path.relative_to(config.project_root)
+                                    results["syllabus_url"] = "/" + rel_syllabus.as_posix()
+                                except ValueError:
+                                    results["syllabus_url"] = None
+                        else:
+                            # Fallback: try direct HTTP download (no Playwright)
+                            dl = SyllabusDownloader(base_dir=config.downloads_dir)
+                            saved_path = dl._download_direct(subject["subject_code"])
+                            if saved_path:
+                                results["syllabus_success"] = True
                     except Exception as exc:
                         logger.exception("Syllabus download failed in web API")
                         results["syllabus_error"] = str(exc)
@@ -795,9 +878,9 @@ def run_web_server(port: int = 5000) -> None:
         httpd.server_close()
         logger.info("HTTP server closed.")
 
-        # Shut down the Playwright worker executor
-        logger.info("Shutting down Playwright worker thread...")
-        _PW_EXECUTOR.shutdown(wait=False)
+        # Stop the dedicated Playwright worker thread
+        logger.info("Stopping dedicated Playwright worker thread...")
+        _PW_THREAD.stop()
 
         global _SHARED_PROVIDER
         if _SHARED_PROVIDER is not None:

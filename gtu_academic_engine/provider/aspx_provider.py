@@ -342,6 +342,15 @@ class ASPXProvider(GTUDataProvider):
             ) from exc
 
         logger.info("Launching Chromium (headless=%s)", self._headless)
+        # -- Thread / event-loop diagnostics --
+        import threading as _th, asyncio as _aio
+        _tname = _th.current_thread().name
+        try:
+            _rl = _aio.get_running_loop()
+            logger.warning("[PW-DIAG] sync_playwright().start() THREAD=%s RUNNING_LOOP=%s THIS CAUSES ERROR", _tname, _rl)
+        except RuntimeError:
+            logger.info("[PW-DIAG] sync_playwright().start() THREAD=%s NO_RUNNING_LOOP safe", _tname)
+        # --
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(
             headless=self._headless,
