@@ -341,21 +341,45 @@ class ASPXProvider(GTUDataProvider):
                 "Playwright not installed. Run: pip install playwright && playwright install chromium"
             ) from exc
 
-        logger.info("Launching Chromium (headless=%s)", self._headless)
-        # -- Thread / event-loop diagnostics --
-        import threading as _th, asyncio as _aio
+        import os as _os, threading as _th, asyncio as _aio
         _tname = _th.current_thread().name
+
+        # Env diagnostics (visible in Render logs)
+        _pw_path = _os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "NOT SET")
+        _home    = _os.environ.get("HOME", "NOT SET")
+        logger.info(
+            "[PW-DIAG] _start() | THREAD=%s | PLAYWRIGHT_BROWSERS_PATH=%s | HOME=%s",
+            _tname, _pw_path, _home,
+        )
+
+        # Event-loop check — must be NO_RUNNING_LOOP in the subprocess
         try:
             _rl = _aio.get_running_loop()
-            logger.warning("[PW-DIAG] sync_playwright().start() THREAD=%s RUNNING_LOOP=%s THIS CAUSES ERROR", _tname, _rl)
+            logger.warning(
+                "[PW-DIAG] sync_playwright().start() THREAD=%s RUNNING_LOOP=%s THIS CAUSES ERROR",
+                _tname, _rl,
+            )
         except RuntimeError:
-            logger.info("[PW-DIAG] sync_playwright().start() THREAD=%s NO_RUNNING_LOOP safe", _tname)
-        # --
+            logger.info(
+                "[PW-DIAG] sync_playwright().start() THREAD=%s NO_RUNNING_LOOP safe",
+                _tname,
+            )
+
+        logger.info("Launching Chromium (headless=%s)", self._headless)
         self._pw = sync_playwright().start()
+
+        # Log the actual executable path Playwright resolved
+        try:
+            _exe = self._pw.chromium.executable_path
+            logger.info("[PW-DIAG] Chromium executable_path = %s", _exe)
+        except Exception:
+            pass
+
         self._browser = self._pw.chromium.launch(
             headless=self._headless,
             slow_mo=self._slow_mo_ms,
-            args=["--disable-blink-features=AutomationControlled"]
+            # NO executable_path: let Playwright use PLAYWRIGHT_BROWSERS_PATH
+            args=["--disable-blink-features=AutomationControlled"],
         )
         ctx = self._browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
