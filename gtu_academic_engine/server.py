@@ -653,50 +653,57 @@ def run_web_server(port: int = 5000) -> None:
     interfaces — required for cloud platforms such as Render.
     """
     # ── Startup banner ────────────────────────────────────────────────────────
-    banner_lines = [
-        "================================================",
-        "  GTU Academic Engine V2.0",
-        "  Initializing...",
-    ]
+    sep = "================================================"
 
-    # Report cache status
+    # Step 1: Cache
     try:
         _cm = CacheManager()
         info = _cm.get_academic_data_info()
         if info.get("exists"):
-            banner_lines.append(
-                f"  Loading Cache...  ({info['total_subjects']} subjects cached)"
-            )
+            cache_line = f"  Loading Cache...         ({info['total_subjects']} subjects)"
         else:
-            banner_lines.append("  Loading Cache...  (empty — will scrape live)")
+            cache_line = "  Loading Cache...         (empty — will scrape live)"
     except Exception as exc:
-        banner_lines.append(f"  Loading Cache...  WARNING: {exc}")
+        cache_line = f"  Loading Cache...         WARNING: {exc}"
         logger.warning("Cache check failed at startup: %s", exc)
 
-    # Report Playwright availability
+    # Step 2: Playwright
     try:
         from playwright.sync_api import sync_playwright  # noqa: F401
-        banner_lines.append("  Initializing Playwright... OK")
+        pw_line = "  Initializing Playwright... OK"
     except ImportError:
-        banner_lines.append(
-            "  Initializing Playwright... NOT INSTALLED "
-            "(run: playwright install chromium)"
-        )
+        pw_line = "  Initializing Playwright... NOT INSTALLED (run: playwright install chromium)"
         logger.warning("Playwright is not installed — live scraping will be unavailable.")
     except Exception as exc:
-        banner_lines.append(f"  Initializing Playwright... WARNING: {exc}")
+        pw_line = f"  Initializing Playwright... WARNING: {exc}"
         logger.warning("Playwright check failed: %s", exc)
 
-    banner_lines += [
-        "  Server Ready",
-        f"  Listening on PORT: {port}",
-        "================================================",
-    ]
+    # Step 3: Directories
+    try:
+        from .config import config as _cfg
+        _cfg.ensure_dirs()
+        dir_line = "  Checking Directories...  OK"
+    except Exception as exc:
+        dir_line = f"  Checking Directories...  WARNING: {exc}"
+        logger.warning("Directory creation failed: %s", exc)
 
-    banner = "\n".join(banner_lines)
-    print(f"\n{banner}\n")
-    for line in banner_lines:
-        logger.info(line.strip())
+    banner = (
+        f"\n{sep}\n"
+        f"\n  GTU Academic Engine V2.0\n"
+        f"\n{cache_line}\n"
+        f"\n{pw_line}\n"
+        f"\n{dir_line}\n"
+        f"\n  Server Ready\n"
+        f"\n  Listening on PORT {port}\n"
+        f"\n{sep}\n"
+    )
+    print(banner)
+    for line in [
+        sep, "GTU Academic Engine V2.0", cache_line.strip(),
+        pw_line.strip(), dir_line.strip(),
+        "Server Ready", f"Listening on PORT {port}", sep,
+    ]:
+        logger.info(line)
 
     # ── Bind and serve ────────────────────────────────────────────────────────
     # Empty string → 0.0.0.0 (all interfaces). Do NOT use "localhost" or

@@ -5,35 +5,21 @@ services:
     plan: free
     region: singapore
 
-    # ── Build ──────────────────────────────────────────────────────────────────
-    # 1. Install all Python dependencies from pyproject.toml (editable install).
-    # 2. Install Chromium + OS-level dependencies Playwright needs.
-    #    PLAYWRIGHT_BROWSERS_PATH directs binaries into Render's persistent
-    #    cache volume so they survive across redeploys.
     buildCommand: |
+      pip install --upgrade pip
       pip install -e .
       playwright install --with-deps chromium
 
-    # ── Start ──────────────────────────────────────────────────────────────────
-    # Render injects $PORT automatically.  main.py detects the PORT env var and
-    # runs run_web_server() in foreground (blocking) mode on that port.
     startCommand: python -m gtu_academic_engine
 
-    # ── Health check ───────────────────────────────────────────────────────────
     healthCheckPath: /health
 
-    # ── Environment variables ──────────────────────────────────────────────────
     envVars:
-      # Playwright browser binary location (Render persistent cache volume).
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/.cache/ms-playwright
 
-      # Unbuffered Python I/O — logs appear in Render dashboard in real time.
       - key: PYTHONUNBUFFERED
         value: "1"
 
-      # Logging level for the application (DEBUG / INFO / WARNING / ERROR).
       - key: GTU_LOG_LEVEL
         value: INFO
-
-      # PORT is auto-injected by Render — do NOT hard-code it here.

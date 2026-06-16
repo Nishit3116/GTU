@@ -5,10 +5,12 @@ works identically on a developer machine and on cloud platforms (Render, etc.)
 without any code change.
 
 Supported environment variables:
-    GTU_CACHE_PATH      Override the cache directory (default: <pkg>/cache)
+    GTU_CACHE_PATH      Override the cache directory    (default: <pkg>/cache)
     GTU_DOWNLOAD_PATH   Override the downloads directory (default: <pkg>/downloads)
-    GTU_LOG_LEVEL       Logging level: DEBUG / INFO / WARNING / ERROR (default: INFO)
-    GTU_METADATA_PATH   Override the metadata directory (default: <pkg>/metadata)
+    GTU_LOG_PATH        Override the logs directory      (default: <pkg>/logs)
+    GTU_METADATA_PATH   Override the metadata directory  (default: <pkg>/metadata)
+    GTU_LOG_LEVEL       Logging level: DEBUG/INFO/WARNING/ERROR (default: INFO)
+    PLAYWRIGHT_BROWSERS_PATH  Playwright binary location (set by render.yaml)
 """
 
 import os
@@ -39,8 +41,7 @@ class Config:
         default_factory=lambda: _env_path("GTU_DOWNLOAD_PATH", _PKG_ROOT / "downloads")
     )
     logs_dir: Path = field(
-        default_factory=lambda: _env_path("GTU_LOG_LEVEL".replace("LEVEL", "PATH"),
-                                          _PKG_ROOT / "logs")
+        default_factory=lambda: _env_path("GTU_LOG_PATH", _PKG_ROOT / "logs")
     )
     metadata_dir: Path = field(
         default_factory=lambda: _env_path("GTU_METADATA_PATH", _PKG_ROOT / "metadata")
@@ -62,6 +63,7 @@ class Config:
 
         Called automatically on startup so the application never crashes with
         'No such file or directory' errors on a fresh environment (e.g. Render).
+        Directories: cache/, downloads/, logs/, metadata/, reports/, history/
         """
         dirs = [
             self.cache_dir,
@@ -69,6 +71,7 @@ class Config:
             self.logs_dir,
             self.metadata_dir,
             self.project_root / "reports",
+            self.project_root / "history",
         ]
         for d in dirs:
             try:
