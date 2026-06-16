@@ -8,6 +8,8 @@ import mimetypes
 import os
 import json
 import logging
+import threading
+import concurrent.futures
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -33,7 +35,43 @@ _STATIC_ALIASES: Dict[str, str] = {
 }
 
 
+# ── Playwright worker thread ──────────────────────────────────────────────────
+#
+# The Playwright sync API raises:
+#   "You are using Playwright Sync API inside the asyncio loop."
+# when called from a thread that already has an active asyncio event loop
+# (Python 3.10+ on Linux always has one).  The fix is to run ALL Playwright
+# operations in a dedicated daemon thread that never touches asyncio.
+#
+# A ThreadPoolExecutor(max_workers=1) guarantees:
+#   - One persistent worker thread with no event loop.
+#   - All tasks are serialised (safe for single shared browser page).
+#   - The thread is reused across requests (no per-request startup cost).
+# ---------------------------------------------------------------------------
+_PW_EXECUTOR: concurrent.futures.ThreadPoolExecutor = (
+    concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="playwright-worker",
+    )
+)
+
 _SHARED_PROVIDER = None
+_PROVIDER_LOCK = threading.Lock()
+
+
+def _ensure_provider() -> "ASPXProvider":
+    """Initialise the shared ASPXProvider inside the Playwright worker thread.
+
+    Must only ever be called from within *_PW_EXECUTOR*.
+    """
+    global _SHARED_PROVIDER
+    if _SHARED_PROVIDER is None:
+        logger.info("Playwright worker: initialising browser provider...")
+        provider = ASPXProvider(headless=True)
+        provider._start()
+        _SHARED_PROVIDER = provider
+        logger.info("Playwright worker: browser provider ready.")
+    return _SHARED_PROVIDER
 
 
 class GTUWebHandler(BaseHTTPRequestHandler):
@@ -41,24 +79,34 @@ class GTUWebHandler(BaseHTTPRequestHandler):
 
     cache_manager = CacheManager()
 
-    def _get_provider(self) -> ASPXProvider:
-        """Return (or lazily initialise) the shared Playwright browser provider.
+    # ------------------------------------------------------------------
+    # Playwright helper
+    # ------------------------------------------------------------------
 
-        Any initialisation error is logged and re-raised so callers can return a
-        graceful 503 instead of crashing the whole server process.
+    def _pw_call(self, method: str, *args, **kwargs):
+        """Execute a provider method in the Playwright worker thread.
+
+        Submits ``provider.<method>(*args, **kwargs)`` to *_PW_EXECUTOR* and
+        blocks until the result is available.  All Playwright sync API calls
+        therefore run in a thread that has no asyncio event loop, which avoids
+        the 'Sync API inside the asyncio loop' error on Render / Linux.
+
+        Args:
+            method: Name of the ASPXProvider method to call.
+            *args, **kwargs: Forwarded to the provider method.
+
+        Returns:
+            Whatever the provider method returns.
+
+        Raises:
+            Re-raises any exception from the worker thread.
         """
-        global _SHARED_PROVIDER
-        if _SHARED_PROVIDER is None:
-            logger.info("Initializing shared Playwright browser provider...")
-            try:
-                _SHARED_PROVIDER = ASPXProvider(headless=True)
-                _SHARED_PROVIDER._start()
-                logger.info("Playwright browser provider ready.")
-            except Exception as exc:
-                logger.error("Playwright initialization failed: %s", exc)
-                _SHARED_PROVIDER = None  # keep None so next request retries
-                raise
-        return _SHARED_PROVIDER
+        def _task():
+            prov = _ensure_provider()
+            return getattr(prov, method)(*args, **kwargs)
+
+        future = _PW_EXECUTOR.submit(_task)
+        return future.result(timeout=120)  # 2-min max per live scrape
 
     def log_message(self, format, *args):
         # Override to suppress default HTTP logging to stdout to keep terminal clean
@@ -174,8 +222,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                     return
                 # On-demand live scrape
                 logger.info("Scraping branches for course: %s", course_id)
-                prov = self._get_provider()
-                scraped = prov.fetch_branches(course_id)
+                scraped = self._pw_call("fetch_branches", course_id)
                 if scraped:
                     self._save_scraped_branches(course_id, scraped)
                 self._send_json(200, scraped)
@@ -194,8 +241,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                     return
                 # Live scrape
                 logger.info("Scraping semesters for %s/%s", course_id, branch_id)
-                prov = self._get_provider()
-                scraped = prov.fetch_semesters(course_id, branch_id)
+                scraped = self._pw_call("fetch_semesters", course_id, branch_id)
                 if scraped:
                     self._save_scraped_semesters(course_id, branch_id, scraped)
                 self._send_json(200, scraped)
@@ -207,11 +253,10 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 if not course_id or not branch_id:
                     self._send_json(400, {"error": "Missing parameters"})
                     return
-                # Fetch live if possible to ensure we match GTU exactly and avoid conflicts
+                # Fetch live if possible to ensure we match GTU exactly
                 try:
                     logger.info("Live fetching academic years from GTU for %s/%s", course_id, branch_id)
-                    prov = self._get_provider()
-                    scraped = prov.fetch_academic_years(course_id, branch_id)
+                    scraped = self._pw_call("fetch_academic_years", course_id, branch_id)
                     if scraped:
                         self._send_json(200, scraped)
                         return
@@ -241,8 +286,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                     return
                 # Live scrape
                 logger.info("Scraping electives for %s/%s sem=%s", course_id, branch_id, sem)
-                prov = self._get_provider()
-                scraped = prov.fetch_elective_types(course_id, branch_id, sem)
+                scraped = self._pw_call("fetch_elective_types", course_id, branch_id, sem)
                 self._send_json(200, scraped)
                 return
 
@@ -268,13 +312,12 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                     return
 
                 # Live scrape on-demand
-                prov = self._get_provider()
                 if elective_filter:
                     logger.info("Scraping subjects for %s/%s/sem=%s/year=%s/elec=%s", course, branch, sem, year, elective_filter)
-                    scraped = prov.fetch_subjects(course, branch, sem, elective_filter, academic_year=year)
+                    scraped = self._pw_call("fetch_subjects", course, branch, sem, elective_filter, academic_year=year)
                 else:
                     logger.info("Scraping subjects for %s/%s/sem=%s/year=%s/elec=All", course, branch, sem, year)
-                    scraped = prov.fetch_subjects_both_electives(course, branch, sem, academic_year=year)
+                    scraped = self._pw_call("fetch_subjects_both_electives", course, branch, sem, academic_year=year)
 
                 # Fetch full names for metadata enrichment if we have cache
                 c_name = course
@@ -332,8 +375,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                         subject_code = code_match.group(0)
                         logger.info("Subject code %s extracted from query. Fetching live...", subject_code)
                         try:
-                            prov = self._get_provider()
-                            scraped = prov.fetch_subject_by_code(subject_code)
+                            scraped = self._pw_call("fetch_subject_by_code", subject_code)
                             if scraped:
                                 # Save/cache the scraped subject details
                                 db = self.cache_manager.load_academic_data() or {
@@ -371,8 +413,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                         if len(name_query) >= 3:
                             logger.info("Subject name query '%s' received. Fetching live...", name_query)
                             try:
-                                prov = self._get_provider()
-                                scraped = prov.fetch_subject_by_name(name_query)
+                                scraped = self._pw_call("fetch_subject_by_name", name_query)
                                 if scraped:
                                     # Save/cache the scraped subject details
                                     db = self.cache_manager.load_academic_data() or {
@@ -750,9 +791,13 @@ def run_web_server(port: int = 5000) -> None:
         print("\n  Shutting down server...")
         logger.info("KeyboardInterrupt received — stopping web server.")
     finally:
-        # ── Graceful shutdown ─────────────────────────────────────────────────
+        # ── Graceful shutdown ──────────────────────────────────────────────────
         httpd.server_close()
         logger.info("HTTP server closed.")
+
+        # Shut down the Playwright worker executor
+        logger.info("Shutting down Playwright worker thread...")
+        _PW_EXECUTOR.shutdown(wait=False)
 
         global _SHARED_PROVIDER
         if _SHARED_PROVIDER is not None:
