@@ -1,3 +1,10 @@
+"""GTU Paper Repository Client for searching and downloading PDFs.
+
+This module provides HTTP client functionality for interfacing with GTU's 
+paper repository service (Download1.aspx), including session bootstrap, 
+PDF URL searching, and PDF download capabilities.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -11,6 +18,12 @@ from ..config import GTUPYQConfig
 
 
 class _GTUPageParser(HTMLParser):
+    """HTML parser for extracting form inputs and PDF links from GTU pages.
+    
+    Extracts:
+    - Form input names and values (for POST requests)
+    - PDF download links (href attributes from anchor tags)
+    """
     def __init__(self) -> None:
         super().__init__()
         self.inputs: dict[str, str] = {}
@@ -27,16 +40,34 @@ class _GTUPageParser(HTMLParser):
 
 
 class GTUPaperRepositoryClient:
+    """HTTP client for GTU's paper repository service.
+    
+    Handles:
+    - Session bootstrapping (cookie acquisition)
+    - PDF URL searching via form submission
+    - PDF download with proper referer headers
+    
+    The repository service returns PDF URLs matching the pattern:
+    /uploads/{SESSION}/{COURSE}/{SUBJECT_CODE}.pdf
+    """
     def __init__(self, config: GTUPYQConfig, logger: logging.Logger) -> None:
+        """Initialize repository client with configuration and logger.
+        
+        Args:
+            config: GTUPYQConfig with repository URLs and request settings
+            logger: Logger instance for operation tracking
+        """
         self._config = config
         self._logger = logger
         self._session = requests.Session()
         self._session.headers.update(config.request_headers)
 
     def close(self) -> None:
+        """Close the HTTP session and release resources."""
         self._session.close()
 
     def bootstrap(self) -> None:
+        """Bootstrap the session by visiting GTU main page to acquire cookies."""
         self._session.get(
             self._config.bootstrap_url,
             timeout=self._config.request_timeout,
@@ -44,6 +75,20 @@ class GTUPaperRepositoryClient:
         )
 
     def search_pdf_urls(self, subject_code: str, session_code: str) -> list[str]:
+        """Search for PDF download URLs matching subject and session.
+        
+        Performs form submission to repository search with proper VIEWSTATE and 
+        other ASP.NET form fields.
+        
+        Args:
+            subject_code: GTU subject code (e.g., "3170719")
+            session_code: Session code (e.g., "W2026")
+            
+        Returns:
+            List of full PDF URLs matching the pattern 
+            /uploads/{SESSION}/{COURSE}/{SUBJECT_CODE}.pdf.
+            Returns empty list on network errors or parse failures.
+        """
         page = self._session.get(
             self._config.repository_url,
             timeout=self._config.request_timeout,
@@ -100,6 +145,18 @@ class GTUPaperRepositoryClient:
         return exact_links
 
     def download_bytes(self, pdf_url: str) -> bytes:
+        """Download PDF bytes from a given URL with proper headers.
+        
+        Args:
+            pdf_url: Full URL to the PDF file
+            
+        Returns:
+            Raw PDF file bytes
+            
+        Raises:
+            requests.HTTPError: If the HTTP response indicates an error
+            requests.RequestException: If network error occurs
+        """
         response = self._session.get(
             pdf_url,
             timeout=self._config.request_timeout,

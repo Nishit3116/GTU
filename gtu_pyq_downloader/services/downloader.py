@@ -1,3 +1,14 @@
+"""PDF downloader service for GTU papers.
+
+Implements robust PDF download with:
+- Repository-based search (primary method)
+- Direct URL fallback (secondary method)
+- Retry logic with exponential backoff
+- SHA256 duplicate detection
+- PDF validation before saving
+- Smart reuse of existing valid PDFs
+"""
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +25,22 @@ from .pdf_validation import is_valid_pdf
 
 
 class GTUPYQDownloader:
+    """Downloads GTU papers for a given subject code and session.
+    
+    Strategy:
+    1. Try repository URLs (from search_pdf_urls)
+    2. Fall back to direct base URL with retries
+    3. Reuse valid existing files
+    4. Skip missing files without failing the entire run
+    """
+    
     def __init__(self, config: GTUPYQConfig, logger: logging.Logger) -> None:
+        """Initialize downloader with configuration, logger, and HTTP session.
+        
+        Args:
+            config: GTUPYQConfig instance with URLs and request settings
+            logger: Logger instance for operation tracking
+        """
         self._config = config
         self._logger = logger
         self._session = requests.Session()
@@ -23,15 +49,39 @@ class GTUPYQDownloader:
         self._repository.bootstrap()
 
     def close(self) -> None:
+        """Close HTTP sessions and cleanup resources."""
         self._session.close()
         self._repository.close()
 
     def ensure_subject_folder(self, subject_code: str) -> Path:
+        """Create subject directory if it doesn't exist.
+        
+        Args:
+            subject_code: GTU subject code
+            
+        Returns:
+            Path to the subject directory
+        """
         folder = self._config.subject_directory(subject_code)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def fetch_paper(self, subject_code: str, session: str) -> PaperResult:
+        """Download or reuse a PDF for a given subject and session.
+        
+        Tries in this order:
+        1. Return existing valid PDF
+        2. Search repository for URLs and download
+        3. Fall back to direct base URL with retries
+        4. Return appropriate status (NOT_FOUND, BLOCKED, FAILED, etc.)
+        
+        Args:
+            subject_code: GTU subject code
+            session: Session code (e.g., "W2026", "S2026")
+            
+        Returns:
+            PaperResult with status, file path (if successful), and message
+        """
         folder = self.ensure_subject_folder(subject_code)
         file_path = folder / f"{session}_{subject_code}.pdf"
 
@@ -54,7 +104,27 @@ class GTUPYQDownloader:
         if repository_urls:
             for repository_url in repository_urls:
                 try:
-                    file_path.write_bytes(self._repository.download_bytes(repository_url))
+                    data = self._repository.download_bytes(repository_url)
+                    # compute sha256 and detect duplicates
+                    import hashlib
+
+                    sha = hashlib.sha256(data).hexdigest()
+                    # check existing files in folder for same hash
+                    for existing in folder.glob(f"*_{subject_code}.pdf"):
+                        try:
+                            if existing.exists():
+                                if hashlib.sha256(existing.read_bytes()).hexdigest() == sha:
+                                    self._logger.info("Duplicate detected. Skipping save, using %s", existing)
+                                    return PaperResult(
+                                        session=session,
+                                        status=PaperStatus.EXISTS,
+                                        file_path=existing,
+                                        message=f"Duplicate of {existing.name}",
+                                    )
+                        except Exception:
+                            continue
+
+                    file_path.write_bytes(data)
 
                     if is_valid_pdf(file_path):
                         self._logger.info("Downloaded PDF from repository: %s", file_path)

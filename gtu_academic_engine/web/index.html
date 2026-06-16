@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GTU Academic Engine V2</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="glow-bg-secondary"></div>
+    <div class="container">
+        <!-- ── Header ── -->
+        <header>
+            <div class="header-logo">
+                <span class="logo-icon">▲</span>
+                <h1>GTU Academic Engine <span class="badge">V2</span></h1>
+            </div>
+            <p class="subtitle">
+                <span id="typewriter-text"></span><span class="typewriter-cursor">|</span>
+            </p>
+        </header>
+
+        <!-- ── Quick Search bar ── -->
+        <section class="card quick-search-section">
+            <div class="search-box">
+                <span class="search-icon" id="quick-search-btn" style="cursor: pointer;">🔍</span>
+                <input type="text" id="quick-search" placeholder="Ask AI Copilot or search subjects... (e.g. 'BE Computer sem 7' or 'Distributed Systems')">
+                <span style="font-size: 11px; background: rgba(99, 102, 241, 0.15); color: var(--cyan-accent); border: 1px solid rgba(99, 102, 241, 0.3); padding: 4px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; font-family: var(--font-heading); display: inline-flex; align-items: center; gap: 4px;">
+                    <span style="width: 5px; height: 5px; background: #818cf8; border-radius: 50%; box-shadow: 0 0 5px #818cf8;"></span>
+                    AI PARSER ACTIVE
+                </span>
+            </div>
+            <div class="search-suggestions" id="search-suggestions"></div>
+            <div id="quick-search-results" class="quick-results-dropdown hidden"></div>
+        </section>
+
+        <!-- ── Selector Form ── -->
+        <main class="grid-layout">
+            <section class="card selector-card">
+                <h2>Syllabus Portal Queries</h2>
+                <p class="section-desc">Select academic criteria to locate and scrape subjects on-demand</p>
+                
+                <form id="selector-form" onsubmit="event.preventDefault(); searchSubjects();">
+                    <div class="form-group">
+                        <label for="course-select">Course</label>
+                        <select id="course-select" required>
+                            <option value="">Select course</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="branch-select">Branch</label>
+                        <select id="branch-select" disabled required>
+                            <option value="">Select Branch</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sem-select">Semester</label>
+                        <select id="sem-select" disabled required>
+                            <option value="">Select Semester</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="year-select">Academic Year</label>
+                        <select id="year-select" disabled required>
+                            <option value="">Select Academic Year</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="elective-select">Elective / Non-Elective</label>
+                        <select id="elective-select" disabled>
+                            <option value="">All (Elective & Non-Elective)</option>
+                            <option value="Non_Elective">Non-Elective</option>
+                            <option value="Elective">Elective</option>
+                        </select>
+                    </div>
+
+
+                    <button type="submit" id="search-btn" class="btn btn-primary btn-full">
+                        <span class="btn-text">Search Subjects</span>
+                        <div class="spinner hidden" id="search-spinner"></div>
+                    </button>
+                </form>
+            </section>
+
+            <!-- ── Right Column: Info & Stats ── -->
+            <section class="card stats-card">
+                <h2>Local Cache Summary</h2>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-value" id="stat-subjects">0</div>
+                        <div class="stat-label">Cached Subjects</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="stat-courses">0</div>
+                        <div class="stat-label">Courses Scraped</div>
+                    </div>
+                </div>
+                <div class="cache-status" id="cache-last-updated">
+                    No cache detected. Scrapes will run live.
+                </div>
+                
+                <div class="divider"></div>
+                
+                <h3>Downloads Destination</h3>
+                <div class="folder-path" id="downloads-dest">
+                    downloads/
+                </div>
+            </section>
+        </main>
+
+        <!-- ── Results Section ── -->
+        <section class="card results-card hidden" id="results-card">
+            <div class="results-header">
+                <h2 id="results-title">Subjects Found</h2>
+                <span class="results-count" id="results-count">0</span>
+            </div>
+            
+            <div class="table-wrapper">
+                <table id="subjects-table">
+                    <thead>
+                        <tr>
+                            <th width="30"></th>
+                            <th width="120">Subject Code</th>
+                            <th width="80">Branch</th>
+                            <th width="90">Eff. From</th>
+                            <th>Subject Name</th>
+                            <th>Category</th>
+                            <th width="60">Sem</th>
+                            <th width="280" class="actions-header">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subjects-tbody">
+                        <!-- Filled dynamically -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        
+        <!-- ── Footer & Disclaimer ── -->
+        <footer class="main-footer">
+            <div class="footer-copyright">
+                &copy; 2026 GTU Academic Engine | All Rights Reserved
+            </div>
+            <div class="footer-author">
+                Made with <span class="heart">❤️</span> by Nishit Savaliya
+            </div>
+            <div class="footer-links">
+                <a href="javascript:void(0)" onclick="openInfoModal('dmca')">DMCA</a>
+                <a href="javascript:void(0)" onclick="openInfoModal('disclaimer')">Disclaimer</a>
+                <a href="javascript:void(0)" onclick="openInfoModal('privacy')">Privacy Policy</a>
+                <a href="javascript:void(0)" onclick="openInfoModal('terms')">Terms & Conditions</a>
+                <a href="javascript:void(0)" onclick="openInfoModal('about')">About Us</a>
+                <a href="javascript:void(0)" onclick="openInfoModal('contact')">Contact Us</a>
+            </div>
+        </footer>
+    </div>
+
+    <!-- ── Downloading Overlay Modal ── -->
+    <div class="modal-overlay hidden" id="download-modal">
+        <div class="modal" style="max-width: 520px; width: 90%;">
+            <div class="modal-header">
+                <h3 id="modal-title">Configure Download Settings</h3>
+            </div>
+            <div class="modal-body">
+                <div class="subject-info-banner">
+                    <div class="sub-code" id="modal-sub-code">-------</div>
+                    <div class="sub-name" id="modal-sub-name">Loading Subject...</div>
+                </div>
+
+                <!-- Configuration Form -->
+                <div id="modal-config-section">
+                    <div style="margin-bottom: 20px; font-size: 13.5px; color: var(--text-secondary);" id="modal-config-desc">
+                        Configure PDF merge and session settings for PYQ download:
+                    </div>
+                    
+                    <div id="modal-pyq-inputs">
+                        <!-- Year Range: Start Year and End Year side-by-side -->
+                        <div class="form-group-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="modal-start-year">Start Year</label>
+                                <select id="modal-start-year" style="width: 100%; background: hsl(224, 22%, 10%); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text-primary); outline: none;">
+                                    <option value="2018">2018</option>
+                                    <option value="2019">2019</option>
+                                    <option value="2020">2020</option>
+                                    <option value="2021" selected>2021</option>
+                                    <option value="2022">2022</option>
+                                    <option value="2023">2023</option>
+                                    <option value="2024">2024</option>
+                                    <option value="2025">2025</option>
+                                    <option value="2026">2026</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label for="modal-end-year">End Year</label>
+                                <select id="modal-end-year" style="width: 100%; background: hsl(224, 22%, 10%); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text-primary); outline: none;">
+                                    <option value="2018">2018</option>
+                                    <option value="2019">2019</option>
+                                    <option value="2020">2020</option>
+                                    <option value="2021">2021</option>
+                                    <option value="2022">2022</option>
+                                    <option value="2023">2023</option>
+                                    <option value="2024">2024</option>
+                                    <option value="2025" selected>2025</option>
+                                    <option value="2026">2026</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Merge Order -->
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label for="modal-merge-order">Merge Order</label>
+                            <select id="modal-merge-order" style="width: 100%; background: hsl(224, 22%, 10%); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text-primary); outline: none;">
+                                <option value="ascending">Ascending (Oldest First)</option>
+                                <option value="descending">Descending (Newest First)</option>
+                            </select>
+                        </div>
+
+                        <!-- Session Order Priority -->
+                        <div class="form-group" style="margin-bottom: 25px;">
+                            <label for="modal-session-order">Session Order Priority</label>
+                            <select id="modal-session-order" style="width: 100%; background: hsl(224, 22%, 10%); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text-primary); outline: none;">
+                                <option value="winter-first">Winter Session First</option>
+                                <option value="summer-first">Summer Session First</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 12px; justify-content: flex-end;">
+                        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button class="btn btn-primary" id="modal-start-btn" onclick="startActualDownload()">Start Download</button>
+                    </div>
+                </div>
+
+                <!-- Progress Status (hidden initially) -->
+                <div id="modal-progress-section" class="hidden">
+                    <div class="progress-container">
+                        <div class="progress-bar-track">
+                            <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <ul class="steps-list" id="steps-list">
+                        <li class="step pending" id="step-init">Initializing download directories</li>
+                        <li class="step pending" id="step-pyq">Downloading & merging V1 PYQs</li>
+                        <li class="step pending" id="step-syllabus">Retrieving syllabus PDF</li>
+                        <li class="step pending" id="step-complete">Finalizing download package</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-footer hidden" id="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Syllabus Preview Modal ── -->
+    <div class="modal-overlay hidden" id="syllabus-modal">
+        <div class="modal" style="max-width: 900px; width: 95%; height: 85vh; padding: 20px; display: flex; flex-direction: column;">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 15px; border-bottom: 1px solid var(--border-color); margin-bottom: 15px;">
+                <h3 id="syllabus-modal-title" style="margin: 0; font-size: 18px; text-align: left;">Syllabus Preview</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-primary" id="syllabus-modal-download-btn" style="padding: 6px 16px; font-size: 13.5px;">Download</button>
+                    <button class="btn btn-secondary" onclick="closeSyllabusModal()" style="padding: 6px 16px; font-size: 13.5px;">Close</button>
+                </div>
+            </div>
+            <div class="modal-body" style="flex: 1; padding: 0; overflow: hidden; background: #080a0f; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                <iframe id="syllabus-iframe" src="" style="width: 100%; height: 100%; border: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Info Overlay Modal ── -->
+    <div class="modal-overlay hidden" id="info-modal" onclick="handleInfoOverlayClick(event)">
+        <div class="modal" style="max-width: 600px; width: 95%; max-height: 90vh; display: flex; flex-direction: column; padding: 25px;">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <h3 id="info-modal-title" style="margin: 0; font-size: 20px; color: var(--text-primary);">Policy Details</h3>
+                <button class="expand-btn" onclick="closeInfoModal()" style="font-size: 24px; padding: 0 5px; color: var(--text-secondary); line-height: 1; border: none; background: transparent;">&times;</button>
+            </div>
+            <div class="modal-body" id="info-modal-body" style="flex: 1; overflow-y: auto; font-size: 14.5px; line-height: 1.6; color: var(--text-secondary); padding-right: 5px;">
+                <!-- Dynamic content loaded via JS -->
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid var(--border-color); padding-top: 15px; margin-top: 15px; display: flex; justify-content: flex-end;">
+                <button class="btn btn-secondary" onclick="closeInfoModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Success Toast ── -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/index.js"></script>
+</body>
+</html>

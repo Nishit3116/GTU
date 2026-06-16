@@ -3,24 +3,27 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gtu-pyq-downloader"
-version = "1.0.0"
-description = "Production-ready GTU PYQ downloader and PDF merger"
+name = "gtu-academic-engine"
+version = "2.0.0"
+description = "GTU Academic Engine V2 — full academic data collector and PYQ downloader"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",
     "pypdf>=5.0.0",
+    "playwright>=1.40.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.scripts]
 gtu-pyq = "gtu_pyq_downloader.cli:main"
+gtu-engine = "gtu_academic_engine.__main__:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["gtu_pyq_downloader*"]
+include = ["gtu_pyq_downloader*", "gtu_academic_engine*"]
 
 [tool.black]
 line-length = 88

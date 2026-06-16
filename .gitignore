@@ -34,9 +34,13 @@ env/
 *~
 .DS_Store
 
-# Application logs and downloads
+# Application runtime data (auto-generated)
 logs/
 downloads/
+history.json
+settings.json
+exports/
+gtu_academic_engine/cache/*.json
 
 # Testing
 .pytest_cache/
