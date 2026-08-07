@@ -11,8 +11,10 @@ services:
     #    PLAYWRIGHT_BROWSERS_PATH directs binaries into Render's persistent
     #    cache volume so they survive across redeploys.
     buildCommand: |
+      pip install --upgrade pip
       pip install -e .
-      playwright install --with-deps chromium
+      playwright install chromium
+
 
     # ── Start ──────────────────────────────────────────────────────────────────
     # Render injects $PORT automatically.  main.py detects the PORT env var and

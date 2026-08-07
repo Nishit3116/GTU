@@ -1,6 +1,7 @@
-# Core runtime dependencies (mirrors pyproject.toml)
-# Render uses this during `pip install -e .` — kept in sync manually.
+# Core runtime dependencies for GTU Academic Engine V2
 requests>=2.31.0
 pypdf>=5.0.0
 playwright>=1.40.0
 openpyxl>=3.1.0
+setuptools>=68.0.0
+

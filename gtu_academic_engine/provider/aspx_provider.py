@@ -343,11 +343,26 @@ class ASPXProvider(GTUDataProvider):
 
         logger.info("Launching Chromium (headless=%s)", self._headless)
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=self._headless,
-            slow_mo=self._slow_mo_ms,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
+        try:
+            self._browser = self._pw.chromium.launch(
+                headless=self._headless,
+                slow_mo=self._slow_mo_ms,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+        except Exception as e:
+            if "executable" in str(e).lower() or "install" in str(e).lower() or "missing" in str(e).lower():
+                logger.info("Playwright executable missing. Attempting automatic browser installation...")
+                import subprocess
+                import sys
+                subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                self._browser = self._pw.chromium.launch(
+                    headless=self._headless,
+                    slow_mo=self._slow_mo_ms,
+                    args=["--disable-blink-features=AutomationControlled"]
+                )
+            else:
+                raise
+
         ctx = self._browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )

@@ -49,3 +49,7 @@ gtu_academic_engine/cache/*.json
 
 # OS
 Thumbs.db
+
+# Downloaded files
+merged_pyq.pdf
+syllabus.pdf

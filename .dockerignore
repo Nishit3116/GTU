@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+.github/
+.venv/
+venv/
+downloads/
+logs/
+exports/
+tests/
+gtu_academic_engine/cache/gtu_academic_data.json
