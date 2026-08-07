@@ -719,7 +719,7 @@ def run() -> None:
         or "RAILWAY_ENVIRONMENT" in os.environ
         or os.environ.get("SERVER_MODE", "").lower() in ("1", "true", "yes")
     )
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5050))
 
     _header("GTU Academic Engine V2")
 

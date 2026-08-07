@@ -73,7 +73,8 @@ class GTUWebHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         if download_name:
-            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+            safe_name = urllib.parse.quote(download_name)
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"; filename*=UTF-8\'\'{safe_name}')
         self.end_headers()
         self.wfile.write(file_path.read_bytes())
 
@@ -111,10 +112,17 @@ class GTUWebHandler(BaseHTTPRequestHandler):
         elif path == "/index.js":
             self._send_static(WEB_DIR / "index.js", "application/javascript; charset=utf-8")
             return
-        elif path.startswith("/downloads/"):
-            rel_path = urllib.parse.unquote(path[1:])
-            file_path = config.project_root / rel_path
+        elif "/downloads/" in path:
+            idx = path.find("/downloads/")
+            rel_sub = urllib.parse.unquote(path[idx + len("/downloads/"):])
+            file_path = config.downloads_dir / rel_sub
+            if not file_path.exists():
+                file_path = config.project_root / urllib.parse.unquote(path[1:])
+            
             filename = file_path.name
+            if not filename.lower().endswith(".pdf"):
+                filename = f"{filename}.pdf"
+                
             self._send_static(file_path, "application/pdf", download_name=filename)
             return
 
@@ -174,24 +182,20 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 if not course_id or not branch_id:
                     self._send_json(400, {"error": "Missing parameters"})
                     return
-                # Fetch live if possible to ensure we match GTU exactly and avoid conflicts
-                try:
-                    logger.info("Live fetching academic years from GTU for %s/%s", course_id, branch_id)
-                    prov = self._get_provider()
-                    scraped = prov.fetch_academic_years(course_id, branch_id)
-                    if scraped:
-                        self._send_json(200, scraped)
-                        return
-                except Exception as exc:
-                    logger.warning("Failed to fetch academic years live, falling back to cache: %s", exc)
-
-                # Fallback to cache
-                years = self._get_cached_years(course_id, branch_id)
-                if years:
-                    self._send_json(200, years)
-                    return
-                # Hardcoded fallback of last resort
-                self._send_json(200, ["2018-19", "2024-25"])
+                
+                cached_years = self._get_cached_years(course_id, branch_id)
+                standard_years = [
+                    "All",
+                    "June 2025", "June 2024", "June 2023", "June 2022", "June 2021",
+                    "June 2020", "June 2019", "June 2018", "June 2017", "June 2016",
+                    "June 2015", "June 2014", "June 2013", "June 2012", "June 2011",
+                    "2024-25", "2023-24", "2022-23", "2021-22", "2020-21", "2019-20", "2018-19"
+                ]
+                combined = []
+                for y in cached_years + standard_years:
+                    if y not in combined:
+                        combined.append(y)
+                self._send_json(200, combined)
                 return
 
             elif path == "/api/electives":
@@ -201,16 +205,21 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 if not all([course_id, branch_id, sem]):
                     self._send_json(400, {"error": "Missing parameters"})
                     return
-                # Check cache first
                 electives = self._get_cached_electives(course_id, branch_id, sem)
                 if electives:
                     self._send_json(200, electives)
                     return
-                # Live scrape
-                logger.info("Scraping electives for %s/%s sem=%s", course_id, branch_id, sem)
-                prov = self._get_provider()
-                scraped = prov.fetch_elective_types(course_id, branch_id, sem)
-                self._send_json(200, scraped)
+                # Live fetch exact options directly from original GTU website
+                try:
+                    prov = self._get_provider()
+                    scraped_elec = prov.fetch_elective_types(course_id, branch_id, sem)
+                    if scraped_elec:
+                        self._send_json(200, scraped_elec)
+                        return
+                except Exception as exc:
+                    logger.warning("Failed to fetch electives live: %s", exc)
+
+                self._send_json(200, ["Non_Elective", "Elective"])
                 return
 
             elif path == "/api/subjects":
@@ -219,7 +228,6 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 sem = params.get("sem")
                 year = params.get("year", "")
                 elective = params.get("elective", "")
-                live_scrape = params.get("live", "true").lower() == "true"
 
                 if not all([course, branch, sem]):
                     self._send_json(400, {"error": "Missing parameters"})
@@ -230,7 +238,7 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 cached_subjects = self.cache_manager.get_subjects(
                     course=course, branch=branch, year=year or None, semester=sem, elective_type=elective_filter
                 )
-                if cached_subjects or not live_scrape:
+                if cached_subjects:
                     self._send_json(200, cached_subjects)
                     return
 
@@ -242,6 +250,13 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 else:
                     logger.info("Scraping subjects for %s/%s/sem=%s/year=%s/elec=All", course, branch, sem, year)
                     scraped = prov.fetch_subjects_both_electives(course, branch, sem, academic_year=year)
+
+                if not scraped and year:
+                    logger.info("Scraping fallback without academic_year for %s/%s/sem=%s", course, branch, sem)
+                    if elective_filter:
+                        scraped = prov.fetch_subjects(course, branch, sem, elective_filter, academic_year="")
+                    else:
+                        scraped = prov.fetch_subjects_both_electives(course, branch, sem, academic_year="")
 
                 # Fetch full names for metadata enrichment if we have cache
                 c_name = course
@@ -281,6 +296,32 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 self.cache_manager.save_academic_data(db)
 
                 self._send_json(200, scraped)
+                return
+
+            elif path == "/api/analyze":
+                code = params.get("subject_code")
+                name = params.get("subject_name", code or "")
+                if not code:
+                    self._send_json(400, {"error": "Missing subject_code"})
+                    return
+
+                from gtu_academic_engine.analyzer.analyzer_engine import GTUPaperAnalyzer
+                analyzer = GTUPaperAnalyzer()
+
+                # Search for downloaded merged PYQ PDF
+                pdf_file = None
+                if config.downloads_dir.exists():
+                    for match in config.downloads_dir.glob(f"**/*{code}*.pdf"):
+                        if match.is_file():
+                            pdf_file = match
+                            break
+
+                analysis = analyzer.analyze_paper_pdf(
+                    pdf_path=pdf_file or Path("nonexistent.pdf"),
+                    subject_code=code,
+                    subject_name=name
+                )
+                self._send_json(200, analysis)
                 return
 
             elif path == "/api/search":
@@ -439,54 +480,73 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 # ── Download PYQs ─────────────────────────────────────────────
                 if dl_type in ("pyq", "both"):
                     try:
-                        from gtu_pyq_downloader.config import GTUPYQConfig
-                        from gtu_pyq_downloader.services.pipeline import GTUPYQPipeline
-                        from .utils.settings import SettingsManager
+                        # Check local server disk cache first
+                        cached_pyq_file = None
+                        target_sub_dir = out_dir / code
+                        if target_sub_dir.exists():
+                            for p in target_sub_dir.glob("*.pdf"):
+                                if "merged" in p.name.lower() or p.name.startswith(code):
+                                    cached_pyq_file = p
+                                    break
+                        if not cached_pyq_file and out_dir.exists():
+                            for p in out_dir.glob(f"{code}*.pdf"):
+                                cached_pyq_file = p
+                                break
 
-                        settings = SettingsManager()
-
-                        overrides = data.get("settings", {})
-
-                        v1_config = GTUPYQConfig()
-                        v1_config.downloads_dir = out_dir.parent
-                        v1_config.max_retries = int(overrides.get("retry_count", settings.get("retry_count", 3)))
-                        v1_config.request_timeout = float(overrides.get("timeout_seconds", settings.get("timeout_seconds", 15)))
-
-                        # Generate session list dynamically based on settings and overrides
-                        from .downloader.session_generator import generate_sessions
-                        session_order = overrides.get("session_order", settings.get("default_session_order", "winter-first"))
-                        
-                        start_year = int(overrides.get("start_year", 2018))
-                        end_year = int(overrides.get("end_year", 2026))
-                        
-                        sessions = generate_sessions(start_year, end_year, order=session_order)
-
-                        merge_order = overrides.get("merge_order", settings.get("default_merge_order", "ascending"))
-                        if merge_order == "ascending":
-                            v1_config.sessions = list(reversed(sessions))
+                        if cached_pyq_file and cached_pyq_file.exists():
+                            logger.info("Serving PYQ PDF from local server disk cache for code %s", code)
+                            results["pyq_success"] = True
+                            results["pyq_found"] = 1
+                            results["pyq_missing"] = 0
+                            results["cached"] = True
+                            results["pyq_url"] = self._make_download_url(cached_pyq_file)
                         else:
-                            v1_config.sessions = sessions
+                            from gtu_pyq_downloader.config import GTUPYQConfig
+                            from gtu_pyq_downloader.services.pipeline import GTUPYQPipeline
+                            from .utils.settings import SettingsManager
 
-                        pipeline = GTUPYQPipeline(v1_config, logger)
+                            settings = SettingsManager()
 
-                        pipeline_result = pipeline.run(code)
-                        results["pyq_success"] = True
-                        results["pyq_found"] = pipeline_result.total_found
-                        results["pyq_missing"] = pipeline_result.total_missing
+                            overrides = data.get("settings", {})
 
-                        # Get relative path for browser download
-                        output_path = pipeline_result.output_path
-                        if output_path:
-                            try:
-                                rel_pyq = Path(output_path).relative_to(config.project_root)
-                                results["pyq_url"] = "/" + rel_pyq.as_posix()
-                            except ValueError:
+                            v1_config = GTUPYQConfig()
+                            v1_config.downloads_dir = out_dir.parent
+                            v1_config.max_retries = int(overrides.get("retry_count", settings.get("retry_count", 3)))
+                            v1_config.request_timeout = float(overrides.get("timeout_seconds", settings.get("timeout_seconds", 15)))
+
+                            # Generate session list dynamically based on settings and overrides
+                            from .downloader.session_generator import generate_sessions
+                            session_order = overrides.get("session_order", settings.get("default_session_order", "winter-first"))
+                            
+                            start_year = int(overrides.get("start_year", 2018))
+                            end_year = int(overrides.get("end_year", 2026))
+                            
+                            sessions = generate_sessions(start_year, end_year, order=session_order)
+
+                            merge_order = overrides.get("merge_order", settings.get("default_merge_order", "ascending"))
+                            if merge_order == "ascending":
+                                v1_config.sessions = list(reversed(sessions))
+                            else:
+                                v1_config.sessions = sessions
+
+                            pipeline = GTUPYQPipeline(v1_config, logger)
+
+                            pipeline_result = pipeline.run(code)
+                            results["pyq_success"] = True
+                            results["pyq_found"] = pipeline_result.total_found
+                            results["pyq_missing"] = pipeline_result.total_missing
+
+                            # Get relative path for browser download
+                            output_path = pipeline_result.output_path
+                            if output_path:
+                                results["pyq_url"] = self._make_download_url(Path(output_path))
+                            else:
                                 results["pyq_url"] = None
 
-                        # Write metadata and report
-                        from .main import _write_metadata_and_report
-                        _write_metadata_and_report(subject, pipeline_result, out_dir / code, 5.0)
-                        pipeline.close()
+                            # Write metadata and report
+                            from .main import _write_metadata_and_report
+                            _write_metadata_and_report(subject, pipeline_result, out_dir / code, 5.0)
+                            pipeline.close()
                     except Exception as exc:
                         logger.exception("PYQ download failed in web API")
                         results["pyq_error"] = str(exc)
@@ -494,18 +554,25 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 # ── Download Syllabus ─────────────────────────────────────────
                 if dl_type in ("syllabus", "both"):
                     try:
-                        dl = SyllabusDownloader(base_dir=config.downloads_dir)
-                        saved_path = dl.download(subject)
-                        if saved_path:
-                            results["syllabus_success"] = True
-                            results["syllabus_path"] = str(saved_path)
+                        # Check local server disk cache first for syllabus
+                        cached_syllabus = None
+                        if out_dir.exists():
+                            for p in out_dir.glob("*syllabus*.pdf"):
+                                cached_syllabus = p
+                                break
 
-                            # Get relative path for browser download
-                            try:
-                                rel_syllabus = Path(saved_path).relative_to(config.project_root)
-                                results["syllabus_url"] = "/" + rel_syllabus.as_posix()
-                            except ValueError:
-                                results["syllabus_url"] = None
+                        if cached_syllabus and cached_syllabus.exists():
+                            logger.info("Serving Syllabus PDF from local server disk cache for code %s", code)
+                            results["syllabus_success"] = True
+                            results["syllabus_path"] = str(cached_syllabus)
+                            results["syllabus_url"] = self._make_download_url(cached_syllabus)
+                        else:
+                            dl = SyllabusDownloader(base_dir=config.downloads_dir)
+                            saved_path = dl.download(subject)
+                            if saved_path:
+                                results["syllabus_success"] = True
+                                results["syllabus_path"] = str(saved_path)
+                                results["syllabus_url"] = self._make_download_url(Path(saved_path))
                     except Exception as exc:
                         logger.exception("Syllabus download failed in web API")
                         results["syllabus_error"] = str(exc)
@@ -519,32 +586,90 @@ class GTUWebHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    # ── Cache helpers ─────────────────────────────────────────────────────────
+    def _make_download_url(self, abs_path: Path) -> str:
+        path_str = abs_path.as_posix()
+        if "/downloads/" in path_str:
+            idx = path_str.find("/downloads/")
+            return path_str[idx:]
+        try:
+            rel = abs_path.relative_to(config.project_root)
+            return "/" + rel.as_posix()
+        except Exception:
+            return f"/downloads/{abs_path.name}"
 
     def _get_cached_branches(self, course_id: str) -> List[Dict]:
         db = self.cache_manager.load_academic_data()
-        if not db or "database" not in db:
-            return []
-        course_data = db["database"].get(course_id, {})
-        branches_data = course_data.get("_branches", {})
         result = []
-        for bid, val in branches_data.items():
-            meta = val.get("_meta", {})
-            result.append({"id": bid, "name": meta.get("name", bid), "course_id": course_id})
-        return sorted(result, key=lambda x: x["id"])
+        if db and "database" in db:
+            course_data = db["database"].get(course_id, {})
+            branches_data = course_data.get("_branches", {})
+            for bid, val in branches_data.items():
+                meta = val.get("_meta", {})
+                result.append({"id": bid, "name": meta.get("name", bid), "course_id": course_id})
+        
+        if result:
+            return sorted(result, key=lambda x: x["id"])
+
+        # Fallback branches if course not cached yet
+        c = (course_id or "").upper()
+        if c == "BE":
+            standard_be = [
+                ("01", "AERONAUTICAL ENGINEERING"),
+                ("02", "AUTOMOBILE ENGINEERING"),
+                ("03", "BIOMEDICAL ENGINEERING"),
+                ("04", "BIOTECHNOLOGY"),
+                ("05", "CHEMICAL ENGINEERING"),
+                ("06", "CIVIL ENGINEERING"),
+                ("07", "COMPUTER ENGINEERING"),
+                ("08", "ELECTRICAL & ELECTRONICS ENGINEERING"),
+                ("09", "ELECTRICAL ENGINEERING"),
+                ("10", "ELECTRONICS & COMMUNICATION ENGINEERING"),
+                ("11", "ELECTRONICS & TELECOMMUNICATION ENGINEERING"),
+                ("13", "ENVIRONMENTAL ENGINEERING"),
+                ("14", "FOOD PROCESSING TECHNOLOGY"),
+                ("16", "INFORMATION TECHNOLOGY"),
+                ("17", "INSTRUMENTATION & CONTROL ENGINEERING"),
+                ("19", "MECHANICAL ENGINEERING"),
+                ("20", "MECHATRONICS ENGINEERING"),
+                ("21", "METALLURGICAL ENGINEERING"),
+                ("22", "MINING ENGINEERING"),
+                ("23", "PLASTIC TECHNOLOGY"),
+                ("24", "POWER ELECTRONICS"),
+                ("25", "PRODUCTION ENGINEERING"),
+                ("26", "RUBBER TECHNOLOGY"),
+                ("28", "TEXTILE TECHNOLOGY"),
+                ("31", "COMPUTER SCIENCE & ENGINEERING"),
+                ("42", "ARTIFICIAL INTELLIGENCE & MACHINE LEARNING"),
+                ("46", "COMPUTER SCIENCE & ENGINEERING (DATA SCIENCE)"),
+            ]
+            return [{"id": bid, "name": f"{bid} - {bname}", "course_id": "BE"} for bid, bname in standard_be]
+
+        return result
 
     def _get_cached_semesters(self, course_id: str, branch_id: str) -> List[Dict]:
         db = self.cache_manager.load_academic_data()
-        if not db or "database" not in db:
-            return []
-        course_data = db["database"].get(course_id, {})
-        branch_data = course_data.get("_branches", {}).get(branch_id, {})
-        semesters_data = branch_data.get("_semesters", {})
         result = []
-        for sem_val, val in semesters_data.items():
-            meta = val.get("_meta", {})
-            result.append({"value": sem_val, "text": meta.get("text", f"Semester {sem_val}")})
-        return sorted(result, key=lambda x: x["value"])
+        if db and "database" in db:
+            course_data = db["database"].get(course_id, {})
+            branch_data = course_data.get("_branches", {}).get(branch_id, {})
+            semesters_data = branch_data.get("_semesters", {})
+            for sem_val, val in semesters_data.items():
+                meta = val.get("_meta", {})
+                result.append({"value": sem_val, "text": meta.get("text", f"Semester {sem_val}")})
+        
+        if result:
+            return sorted(result, key=lambda x: int(x["value"]) if str(x["value"]).isdigit() else x["value"])
+
+        # Fallback: Provide standard GTU semester range based on course type
+        c = (course_id or "").upper()
+        if c in ("ME", "MBA", "MCA", "MPH", "MR", "MA"):
+            max_sem = 4
+        elif c in ("FD", "PB", "IC", "PH"):
+            max_sem = 10
+        else:
+            max_sem = 8
+        
+        return [{"value": str(i), "text": f"Semester {i}"} for i in range(1, max_sem + 1)]
 
     def _get_cached_years(self, course_id: str, branch_id: str) -> List[str]:
         # Return academic years present in cached subjects for this branch
@@ -686,6 +811,14 @@ def run_web_server(port: int = 5000) -> None:
     except Exception as exc:
         banner_lines.append(f"  Initializing Playwright... WARNING: {exc}")
         logger.warning("Playwright check failed: %s", exc)
+
+    # Start weekly Sunday background sync scheduler
+    try:
+        from .scheduler import start_background_scheduler
+        start_background_scheduler()
+        banner_lines.append("  Initializing Weekly Sunday Sync... OK")
+    except Exception as exc:
+        logger.warning("Could not start background scheduler: %s", exc)
 
     banner_lines += [
         "  Server Ready",

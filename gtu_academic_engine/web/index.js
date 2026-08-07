@@ -431,6 +431,7 @@ function displayResults(subjects, titleText) {
                         <button class="btn btn-secondary" onclick="triggerDownload(${index}, 'pyq')">Download PYQs</button>
                         <button class="btn btn-secondary" onclick="showSyllabusPreview(${index})">Syllabus</button>
                         <button class="btn btn-primary" onclick="triggerDownload(${index}, 'both')">Both</button>
+                        <button class="btn btn-secondary" style="border-color: hsl(250, 90%, 65%); color: hsl(250, 90%, 80%);" onclick="triggerAIAnalysis(${index})">🤖 AI Analysis</button>
                     </div>
                 </td>
             `;
@@ -926,13 +927,43 @@ async function startActualDownload() {
         }
 
         setStep(stepComplete, "active");
-        await wait(600);
+        await wait(400);
         setStep(stepComplete, "done");
         setProgress(100);
 
-        document.getElementById("downloads-dest").innerText = res.out_dir;
-        appendConsoleLog(`[DOWNLOAD] All tasks completed. Files saved in ${res.out_dir}.`, "success");
-        showToast("Resources downloaded successfully!", "success");
+        const linksDiv = document.getElementById("modal-download-links");
+        if (linksDiv) {
+            linksDiv.innerHTML = "";
+            linksDiv.classList.remove("hidden");
+
+            if (res.pyq_url) {
+                const pyqBtn = document.createElement("a");
+                pyqBtn.href = res.pyq_url;
+                pyqBtn.target = "_blank";
+                pyqBtn.rel = "noopener noreferrer";
+                pyqBtn.className = "btn btn-primary";
+                pyqBtn.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; text-decoration: none; padding: 12px; font-size: 14px; width: 100%; box-sizing: border-box; margin-bottom: 10px;";
+                pyqBtn.innerHTML = `📄 Open / View Merged PYQ PDF`;
+                linksDiv.appendChild(pyqBtn);
+
+                // Auto open in new tab
+                window.open(res.pyq_url, "_blank");
+            }
+
+            if (res.syllabus_url) {
+                const sylBtn = document.createElement("a");
+                sylBtn.href = res.syllabus_url;
+                sylBtn.target = "_blank";
+                sylBtn.rel = "noopener noreferrer";
+                sylBtn.className = "btn btn-secondary";
+                sylBtn.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; text-decoration: none; padding: 12px; font-size: 14px; width: 100%; box-sizing: border-box;";
+                sylBtn.innerHTML = `📖 Open / View Syllabus PDF`;
+                linksDiv.appendChild(sylBtn);
+            }
+        }
+
+        appendConsoleLog(`[DOWNLOAD] All tasks completed successfully.`, "success");
+        showToast("Resources downloaded and ready!", "success");
     } else {
         setStep(stepPyq, "error");
         setStep(stepSyllabus, "error");
@@ -947,20 +978,11 @@ async function startActualDownload() {
 
 function showSyllabusPreview(index) {
     const s = currentSubjectsList[index];
-    if (!s) return;
-
-    const modal = document.getElementById("syllabus-modal");
-    document.getElementById("syllabus-modal-title").innerText = `Syllabus Preview: ${s.subject_code} - ${s.subject_name}`;
-    
-    // Bind the download button to trigger direct download
-    const dlBtn = document.getElementById("syllabus-modal-download-btn");
-    dlBtn.onclick = () => downloadSyllabusDirect(index);
-
-    // Set the iframe URL
-    const iframe = document.getElementById("syllabus-iframe");
-    iframe.src = s.syllabus_pdf_url;
-
-    modal.classList.remove("hidden");
+    if (!s || !s.syllabus_pdf_url) {
+        showToast("No syllabus PDF URL available for this subject", "error");
+        return;
+    }
+    window.open(s.syllabus_pdf_url, "_blank");
 }
 
 function closeSyllabusModal() {
@@ -1120,6 +1142,109 @@ function handleInfoOverlayClick(event) {
     if (event.target.id === "info-modal") {
         closeInfoModal();
     }
+}
+
+async function triggerAIAnalysis(index) {
+    const s = currentSubjectsList[index];
+    if (!s) return;
+
+    const modal = document.getElementById("ai-analysis-modal");
+    document.getElementById("ai-modal-title").innerText = `🤖 AI Analysis: ${s.subject_code} - ${s.subject_name}`;
+    document.getElementById("ai-modal-subtitle").innerText = `5-Dimensional Intelligence Breakdown | GTU Academic Engine V2`;
+
+    const modalBody = document.getElementById("ai-modal-body");
+    modalBody.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+            <div class="spinner" style="display: inline-block; width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.1); border-top-color: hsl(250, 90%, 75%); border-radius: 50%; animation: spin 1s infinite linear;"></div>
+            <p style="margin-top: 15px; color: var(--text-secondary);">Analyzing question paper patterns, weightages, and generating predictions...</p>
+        </div>
+    `;
+    modal.classList.remove("hidden");
+
+    try {
+        const queryUrl = `/api/analyze?subject_code=${s.subject_code}&subject_name=${encodeURIComponent(s.subject_name)}&course=${s.course}&branch=${s.branch}&sem=${s.semester}`;
+        const res = await apiGet(queryUrl);
+
+        if (!res || res.status === "error") {
+            modalBody.innerHTML = `<div style="color: var(--danger-color); padding: 20px; text-align: center;">Failed to analyze subject papers.</div>`;
+            return;
+        }
+
+        renderAIAnalysisResult(res, s);
+    } catch (err) {
+        modalBody.innerHTML = `<div style="color: var(--danger-color); padding: 20px; text-align: center;">Analysis error: ${err.message}</div>`;
+    }
+}
+
+function renderAIAnalysisResult(res, s) {
+    const modalBody = document.getElementById("ai-modal-body");
+    
+    // Marks Breakdown Badges
+    const mb = res.marks_breakdown || {};
+    const marksHtml = `
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 25px;">
+            <div style="background: rgba(99, 102, 241, 0.12); border: 1px solid rgba(99, 102, 241, 0.3); padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 11px; color: #a5b4fc; text-transform: uppercase; font-weight: 600;">3-Mark Questions</div>
+                <div style="font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px;">${mb["3_marks_count"] || 0} <span style="font-size: 12px; color: var(--text-secondary);">(${mb["3_marks_pct"] || 0}%)</span></div>
+            </div>
+            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 11px; color: #6ee7b7; text-transform: uppercase; font-weight: 600;">4-Mark Questions</div>
+                <div style="font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px;">${mb["4_marks_count"] || 0} <span style="font-size: 12px; color: var(--text-secondary);">(${mb["4_marks_pct"] || 0}%)</span></div>
+            </div>
+            <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 11px; color: #fcd34d; text-transform: uppercase; font-weight: 600;">7-Mark Questions</div>
+                <div style="font-size: 22px; font-weight: 700; color: #fff; margin-top: 4px;">${mb["7_marks_count"] || 0} <span style="font-size: 12px; color: var(--text-secondary);">(${mb["7_marks_pct"] || 0}%)</span></div>
+            </div>
+        </div>
+    `;
+
+    // Chapter Breakdown & Weightage Progress Bars
+    const chapters = res.chapter_breakdown || [];
+    let chapterHtml = `<h4 style="margin: 0 0 12px 0; color: var(--text-primary); font-size: 15px;">📚 Chapter-wise Marks & Weightage Breakdown</h4>`;
+    chapterHtml += `<div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 25px;">`;
+    chapters.forEach(c => {
+        chapterHtml += `
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 6px; border: 1px solid var(--border-color);">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13.5px;">
+                    <span style="font-weight: 600; color: hsl(250, 90%, 80%);">${c.chapter_name}</span>
+                    <span style="color: var(--text-secondary); font-weight: 600;">${c.weightage_percentage}% Weightage (${c.total_marks} Marks)</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden;">
+                    <div style="width: ${c.weightage_percentage}%; height: 100%; background: linear-gradient(90deg, #6366f1, #a855f7);"></div>
+                </div>
+            </div>
+        `;
+    });
+    chapterHtml += `</div>`;
+
+    // AI Predicted Questions
+    const predicted = res.predicted_questions || [];
+    let predHtml = `<h4 style="margin: 0 0 12px 0; color: var(--text-primary); font-size: 15px;">🔮 AI Predicted High-Probability Questions for Upcoming Exam</h4>`;
+    predHtml += `<div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 25px;">`;
+    predicted.forEach((p, pIdx) => {
+        const isHigh = p.probability.includes("HIGH");
+        const badgeBg = isHigh ? "rgba(239, 68, 68, 0.2)" : "rgba(245, 158, 11, 0.2)";
+        const badgeBorder = isHigh ? "#ef4444" : "#f59e0b";
+        const badgeColor = isHigh ? "#fca5a5" : "#fcd34d";
+
+        predHtml += `
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color); border-left: 4px solid ${badgeBorder}; padding: 14px; border-radius: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">${p.chapter} | ${p.marks} Marks</span>
+                    <span style="background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeBorder}; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 12px;">${p.probability} LIKELIHOOD</span>
+                </div>
+                <div style="font-size: 14px; color: #fff; font-weight: 500; line-height: 1.4;">${pIdx + 1}. ${p.question_text}</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px; font-style: italic;">Reason: ${p.reason}</div>
+            </div>
+        `;
+    });
+    predHtml += `</div>`;
+
+    modalBody.innerHTML = marksHtml + chapterHtml + predHtml;
+}
+
+function closeAIModal() {
+    document.getElementById("ai-analysis-modal").classList.add("hidden");
 }
 
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
