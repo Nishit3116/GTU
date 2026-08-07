@@ -713,17 +713,21 @@ def run() -> None:
     # When PORT is set we run in foreground mode (server blocks the main thread)
     # so the process stays alive. Locally, we keep the existing behaviour:
     # run the server in a background daemon thread and auto-open the browser.
-    render_mode = "PORT" in os.environ
+    render_mode = (
+        "PORT" in os.environ
+        or "RENDER" in os.environ
+        or "RAILWAY_ENVIRONMENT" in os.environ
+        or os.environ.get("SERVER_MODE", "").lower() in ("1", "true", "yes")
+    )
     port = int(os.environ.get("PORT", 5000))
 
     _header("GTU Academic Engine V2")
 
     if render_mode:
-        # ── Render / production mode ─────────────────────────────────────────
-        # Run the server in the foreground on 0.0.0.0 so Render's health-check
-        # can reach it. No browser launch.
-        print(f"  [Render] Starting web server on port {port} (foreground)...")
-        logger.info("Starting in Render/production mode on port %d", port)
+        # ── Cloud / Production mode ───────────────────────────────────────────
+        # Run the server in the foreground on 0.0.0.0 so health-check can reach it.
+        print(f"  [Production Mode] Starting web server on port {port} (foreground)...")
+        logger.info("Starting in production mode on port %d", port)
         run_web_server(port=port)   # blocks until process is killed
     else:
         # ── Local development mode ───────────────────────────────────────────
