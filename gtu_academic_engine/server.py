@@ -298,6 +298,32 @@ class GTUWebHandler(BaseHTTPRequestHandler):
                 self._send_json(200, scraped)
                 return
 
+            elif path == "/api/analyze":
+                code = params.get("subject_code")
+                name = params.get("subject_name", code or "")
+                if not code:
+                    self._send_json(400, {"error": "Missing subject_code"})
+                    return
+
+                from gtu_academic_engine.analyzer.analyzer_engine import GTUPaperAnalyzer
+                analyzer = GTUPaperAnalyzer()
+
+                # Search for downloaded merged PYQ PDF
+                pdf_file = None
+                if config.downloads_dir.exists():
+                    for match in config.downloads_dir.glob(f"**/*{code}*.pdf"):
+                        if match.is_file():
+                            pdf_file = match
+                            break
+
+                analysis = analyzer.analyze_paper_pdf(
+                    pdf_path=pdf_file or Path("nonexistent.pdf"),
+                    subject_code=code,
+                    subject_name=name
+                )
+                self._send_json(200, analysis)
+                return
+
             elif path == "/api/search":
                 q = params.get("q", "")
                 if not q:
