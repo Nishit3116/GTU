@@ -159,9 +159,13 @@ def _select_and_wait(page: Any, css_id: str, value: str, next_css_id: str = None
                 pass
 
         page.select_option(css_id, value=value, timeout=4000)
+        try:
+            page.eval_on_selector(css_id, "sel => sel.dispatchEvent(new Event('change', {bubbles: true}))")
+        except Exception:
+            pass
         
         # Wait a tiny bit for postback to start if any
-        page.wait_for_timeout(250)
+        page.wait_for_timeout(350)
         
         if next_css_id:
             try:
@@ -377,16 +381,16 @@ class ASPXProvider(GTUDataProvider):
         self._page.wait_for_timeout(2000)
         logger.info("Page loaded.")
 
-    def _reload(self) -> None:
-        """Ensure the browser is on the syllabus page. Does not reset selections if already on the page to allow lightning-fast cascading."""
+    def _reload(self, force: bool = True) -> None:
+        """Ensure the browser is on the syllabus page."""
         try:
-            if self._page and self._page.url == SYLLABUS_URL:
+            if not force and self._page and self._page.url == SYLLABUS_URL:
                 logger.debug("Already on syllabus page. Keeping page state for speed.")
                 return
         except Exception:
             pass
 
-        logger.info("Performing full page reload...")
+        logger.info("Performing full page reload to reset ASP.NET WebForms state...")
         self._page.goto(SYLLABUS_URL, wait_until="domcontentloaded", timeout=self._timeout_ms)
         self._page.wait_for_timeout(1000)
 

@@ -147,21 +147,33 @@ class CacheManager:
 
         subjects: List[Dict] = data.get("subjects", [])
 
-        filters = [
-            ("course", course),
-            ("branch", branch),
-            ("academic_year", year),
-            ("elective_type", elective_type),
-        ]
-        for key, val in filters:
-            if val is not None:
-                subjects = [s for s in subjects if str(s.get(key, "")) == str(val)]
+        if course:
+            subjects = [s for s in subjects if str(s.get("course", "")).lower() == str(course).lower()]
 
-        if semester is not None:
-            subjects = [
-                s for s in subjects
-                if str(s.get("semester", "")) == str(semester)
-            ]
+        if branch:
+            subjects = [s for s in subjects if str(s.get("branch", "")).lower() == str(branch).lower()]
+
+        if semester is not None and str(semester).strip() != "":
+            subjects = [s for s in subjects if str(s.get("semester", "")) == str(semester)]
+
+        if elective_type and str(elective_type).strip().lower() not in ("", "all", "all (elective & non-elective)"):
+            subjects = [s for s in subjects if str(s.get("elective_type", "")).lower() == str(elective_type).lower()]
+
+        if year and str(year).strip().lower() not in ("", "all"):
+            # Flexible year matching: check exact string, substring, or digit matching
+            y_str = str(year).strip()
+            y_digits = "".join(ch for ch in y_str if ch.isdigit())
+            filtered_by_year = []
+            for s in subjects:
+                s_year = str(s.get("academic_year", ""))
+                s_digits = "".join(ch for ch in s_year if ch.isdigit())
+                if y_str == s_year or y_str in s_year or s_year in y_str:
+                    filtered_by_year.append(s)
+                elif y_digits and s_digits and (y_digits in s_digits or s_digits in y_digits):
+                    filtered_by_year.append(s)
+            # If flexible year filter matches, use it; otherwise fall back to all subjects for that sem
+            if filtered_by_year:
+                subjects = filtered_by_year
 
         return subjects
 

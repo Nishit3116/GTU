@@ -926,13 +926,43 @@ async function startActualDownload() {
         }
 
         setStep(stepComplete, "active");
-        await wait(600);
+        await wait(400);
         setStep(stepComplete, "done");
         setProgress(100);
 
-        document.getElementById("downloads-dest").innerText = res.out_dir;
-        appendConsoleLog(`[DOWNLOAD] All tasks completed. Files saved in ${res.out_dir}.`, "success");
-        showToast("Resources downloaded successfully!", "success");
+        const linksDiv = document.getElementById("modal-download-links");
+        if (linksDiv) {
+            linksDiv.innerHTML = "";
+            linksDiv.classList.remove("hidden");
+
+            if (res.pyq_url) {
+                const pyqBtn = document.createElement("a");
+                pyqBtn.href = res.pyq_url;
+                pyqBtn.target = "_blank";
+                pyqBtn.rel = "noopener noreferrer";
+                pyqBtn.className = "btn btn-primary";
+                pyqBtn.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; text-decoration: none; padding: 12px; font-size: 14px; width: 100%; box-sizing: border-box; margin-bottom: 10px;";
+                pyqBtn.innerHTML = `📄 Open / View Merged PYQ PDF`;
+                linksDiv.appendChild(pyqBtn);
+
+                // Auto open in new tab
+                window.open(res.pyq_url, "_blank");
+            }
+
+            if (res.syllabus_url) {
+                const sylBtn = document.createElement("a");
+                sylBtn.href = res.syllabus_url;
+                sylBtn.target = "_blank";
+                sylBtn.rel = "noopener noreferrer";
+                sylBtn.className = "btn btn-secondary";
+                sylBtn.style.cssText = "display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; text-decoration: none; padding: 12px; font-size: 14px; width: 100%; box-sizing: border-box;";
+                sylBtn.innerHTML = `📖 Open / View Syllabus PDF`;
+                linksDiv.appendChild(sylBtn);
+            }
+        }
+
+        appendConsoleLog(`[DOWNLOAD] All tasks completed successfully.`, "success");
+        showToast("Resources downloaded and ready!", "success");
     } else {
         setStep(stepPyq, "error");
         setStep(stepSyllabus, "error");
@@ -947,20 +977,11 @@ async function startActualDownload() {
 
 function showSyllabusPreview(index) {
     const s = currentSubjectsList[index];
-    if (!s) return;
-
-    const modal = document.getElementById("syllabus-modal");
-    document.getElementById("syllabus-modal-title").innerText = `Syllabus Preview: ${s.subject_code} - ${s.subject_name}`;
-    
-    // Bind the download button to trigger direct download
-    const dlBtn = document.getElementById("syllabus-modal-download-btn");
-    dlBtn.onclick = () => downloadSyllabusDirect(index);
-
-    // Set the iframe URL
-    const iframe = document.getElementById("syllabus-iframe");
-    iframe.src = s.syllabus_pdf_url;
-
-    modal.classList.remove("hidden");
+    if (!s || !s.syllabus_pdf_url) {
+        showToast("No syllabus PDF URL available for this subject", "error");
+        return;
+    }
+    window.open(s.syllabus_pdf_url, "_blank");
 }
 
 function closeSyllabusModal() {
